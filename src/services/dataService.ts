@@ -63,20 +63,18 @@ export const dataService = {
    */
   async getHistoricalData(ticker: string): Promise<TickerData> {
     const cleanTicker = ticker.trim().toUpperCase();
-
-    // In production or offline, check local cache first for supported tickers
-    // to make it instantly responsive.
     const isProduction = import.meta.env.PROD;
-    
-    if (isProduction && localCache[cleanTicker]) {
-      console.log(`[DataService] Using production cached data for ${cleanTicker}`);
-      return localCache[cleanTicker];
-    }
 
     try {
-      console.log(`[DataService] Fetching live data for ${cleanTicker} via proxy...`);
-      // Fetch 20 years of historical daily data to support backtest from 2006 onwards
-      const response = await fetch(`/api/yahoo/v8/finance/chart/${cleanTicker}?interval=1d&range=20y`);
+      console.log(`[DataService] Fetching live data for ${cleanTicker}...`);
+      const targetUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${cleanTicker}?interval=1d&range=20y`;
+      
+      // In production, fetch via corsproxy.io; in dev, use the vite local proxy config
+      const url = isProduction 
+        ? `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`
+        : `/api/yahoo/v8/finance/chart/${cleanTicker}?interval=1d&range=20y`;
+
+      const response = await fetch(url);
       
       if (!response.ok) {
         throw new Error(`HTTP Error ${response.status}`);
@@ -87,16 +85,15 @@ export const dataService = {
       console.log(`[DataService] Successfully fetched live data for ${cleanTicker} (${parsed.length} items)`);
       return parsed;
     } catch (error) {
-      console.warn(`[DataService] Live fetch failed for ${cleanTicker}, trying local cache...`, error);
+      console.warn(`[DataService] Live fetch failed for ${cleanTicker}, falling back to local cache...`, error);
       
       if (localCache[cleanTicker]) {
-        console.log(`[DataService] Successfully resolved cached data for ${cleanTicker}`);
+        console.log(`[DataService] Successfully resolved cached data fallback for ${cleanTicker}`);
         return localCache[cleanTicker];
       }
       
       throw new Error(
         `Could not retrieve price data for "${cleanTicker}". ` +
-        `Please ensure you are running the development server and the ticker exists. ` +
         `Offline-supported tickers are: ${Object.keys(localCache).join(', ')}`
       );
     }

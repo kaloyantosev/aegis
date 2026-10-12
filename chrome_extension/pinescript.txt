@@ -1,0 +1,29 @@
+//@version=5
+indicator("Render Options Levels", overlay=true)
+
+// Chrome Extension will automate filling these fields
+maxPain = input.float(0.0, "Max Pain")
+sup1    = input.float(0.0, "Support Level")
+res1    = input.float(0.0, "Resistance Level")
+idea    = input.string("", "Trade Description")
+
+// Draw the levels on the screen
+if barstate.islast
+    // Draw Max Pain Line & Label (Purple)
+    if maxPain > 0
+        line.new(bar_index - 50, maxPain, bar_index, maxPain, color=color.purple, width=2, style=line.style_dashed)
+        label.new(bar_index, maxPain, "Max Pain: $" + str.tostring(maxPain, "#.##"), color=color.purple, style=label.style_label_left, textcolor=color.white)
+    
+    // Draw Support Level Line & Label (Red)
+    if sup1 > 0
+        line.new(bar_index - 50, sup1, bar_index, sup1, color=color.red, width=2, style=line.style_solid)
+        label.new(bar_index, sup1, "Support: $" + str.tostring(sup1, "#.##"), color=color.red, style=label.style_label_left, textcolor=color.white)
+    
+    // Draw Resistance Level Line & Label (Green)
+    if res1 > 0
+        line.new(bar_index - 50, res1, bar_index, res1, color=color.green, width=2, style=line.style_solid)
+        label.new(bar_index, res1, "Resistance: $" + str.tostring(res1, "#.##"), color=color.green, style=label.style_label_left, textcolor=color.white)
+    
+    // Draw Trade Idea Description Box (Blue)
+    if idea != ""
+        label.new(bar_index - 25, high, "Plan: " + idea, color=color.blue, style=label.style_label_down, textcolor=color.white, yloc=yloc.abovebar)

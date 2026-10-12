@@ -1,0 +1,582 @@
+[
+  {
+    "symbol": "MSFT",
+    "name": "Microsoft Corporation",
+    "sector": "Technology",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 3707.4,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 607367113,
+        "value": 303234110767.0,
+        "pctChange": 0.023699999
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 485192007,
+        "value": 242236966153.0,
+        "pctChange": 0.0055
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 315653206,
+        "value": 157593022710.0,
+        "pctChange": 0.0292
+      }
+    ]
+  },
+  {
+    "symbol": "NVDA",
+    "name": "NVIDIA Corporation",
+    "sector": "Technology",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 5121.3,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 1941918386,
+        "value": 411842054858.0,
+        "pctChange": 0.0085
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 1540816358,
+        "value": 326776336025.0,
+        "pctChange": 0.0015
+      },
+      {
+        "holder": "FMR, LLC",
+        "shares": 1026051548,
+        "value": 217605014178.0,
+        "pctChange": 0.0324
+      }
+    ]
+  },
+  {
+    "symbol": "AAPL",
+    "name": "Apple Inc.",
+    "sector": "Technology",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 4808.8,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 1162996939,
+        "value": 383219132727.0,
+        "pctChange": 0.016
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 959107911,
+        "value": 316035657119.0,
+        "pctChange": 0.0055
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 615129929,
+        "value": 202691468911.0,
+        "pctChange": 0.0212
+      }
+    ]
+  },
+  {
+    "symbol": "AMZN",
+    "name": "Amazon.com, Inc.",
+    "sector": "Consumer Disc",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 2684.3,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 748403539,
+        "value": 186247705172.0,
+        "pctChange": 0.0175
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 635764130,
+        "value": 158216261779.0,
+        "pctChange": 0.0073
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 397186958,
+        "value": 98843946610.0,
+        "pctChange": 0.0173
+      }
+    ]
+  },
+  {
+    "symbol": "META",
+    "name": "Meta Platforms, Inc.",
+    "sector": "Comm Services",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 1700.6,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 173396976,
+        "value": 115752884875.0,
+        "pctChange": 0.027
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 143440997,
+        "value": 95755471607.0,
+        "pctChange": 0.0092
+      },
+      {
+        "holder": "FMR, LLC",
+        "shares": 95895744,
+        "value": 64016162630.0,
+        "pctChange": -0.1777
+      }
+    ]
+  },
+  {
+    "symbol": "GOOGL",
+    "name": "Alphabet Inc.",
+    "sector": "Comm Services",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 4200.4,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 460972803,
+        "value": 158295750621.0,
+        "pctChange": 0.0313
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 382951664,
+        "value": 131503682452.0,
+        "pctChange": 0.0124
+      },
+      {
+        "holder": "FMR, LLC",
+        "shares": 250714005,
+        "value": 86093932992.0,
+        "pctChange": 0.059899997
+      }
+    ]
+  },
+  {
+    "symbol": "AVGO",
+    "name": "Broadcom Inc.",
+    "sector": "Technology",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 1627.0,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 398213826,
+        "value": 135723212968.0,
+        "pctChange": 0.0318
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 309168582,
+        "value": 105373923651.0,
+        "pctChange": 0.0037
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 196900541,
+        "value": 67109608745.0,
+        "pctChange": 0.028800001
+      }
+    ]
+  },
+  {
+    "symbol": "JPM",
+    "name": "JPMorgan Chase & Co.",
+    "sector": "Financials",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 917.7,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 206290537,
+        "value": 71215619434.0,
+        "pctChange": -0.0093
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 161586023,
+        "value": 55782727057.0,
+        "pctChange": -0.0223
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 125209293,
+        "value": 43224752282.0,
+        "pctChange": 0.0075
+      }
+    ]
+  },
+  {
+    "symbol": "LLY",
+    "name": "Eli Lilly and Company",
+    "sector": "Healthcare",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 1021.7,
+    "topHolders": [
+      {
+        "holder": "Lilly Endowment, Inc",
+        "shares": 90376978,
+        "value": 103597324989.0,
+        "pctChange": -0.0165
+      },
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 67540400,
+        "value": 77420211690.0,
+        "pctChange": 0.0175
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 53528868,
+        "value": 61359072379.0,
+        "pctChange": 0.0031
+      }
+    ]
+  },
+  {
+    "symbol": "TSLA",
+    "name": "Tesla, Inc.",
+    "sector": "Consumer Disc",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 1420.8,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 214123129,
+        "value": 77025698732.0,
+        "pctChange": 0.029000001
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 184023551,
+        "value": 66198092028.0,
+        "pctChange": 0.0064
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 117456756,
+        "value": 42252272064.0,
+        "pctChange": 0.0241
+      }
+    ]
+  },
+  {
+    "symbol": "V",
+    "name": "Visa Inc.",
+    "sector": "Financials",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 698.5,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 137669061,
+        "value": 51507504499.0,
+        "pctChange": 0.0109
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 106150500,
+        "value": 39715149624.0,
+        "pctChange": -0.008
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 82872209,
+        "value": 31005809489.0,
+        "pctChange": 0.0069
+      }
+    ]
+  },
+  {
+    "symbol": "MA",
+    "name": "Mastercard Incorporated",
+    "sector": "Financials",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 500.6,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 66393565,
+        "value": 37942593229.0,
+        "pctChange": -0.0092
+      },
+      {
+        "holder": "Mastercard Foundation Asset Management Corp",
+        "shares": 60347774,
+        "value": 34487544706.0,
+        "pctChange": -0.0749
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 52122015,
+        "value": 29786688114.0,
+        "pctChange": -0.0041
+      }
+    ]
+  },
+  {
+    "symbol": "UNH",
+    "name": "UnitedHealth Group Inc.",
+    "sector": "Healthcare",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 338.4,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 76863061,
+        "value": 28977373997.0,
+        "pctChange": 0.0462
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 59311525,
+        "value": 22360444925.0,
+        "pctChange": 0.0075
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 45633267,
+        "value": 17203741659.0,
+        "pctChange": 0.0066000004
+      }
+    ]
+  },
+  {
+    "symbol": "COST",
+    "name": "Costco Wholesale Corp.",
+    "sector": "Consumer Staples",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 402.9,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 34202834,
+        "value": 31072761145.0,
+        "pctChange": -0.021300001
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 28976605,
+        "value": 26324810568.0,
+        "pctChange": 0.0045
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 18384951,
+        "value": 16702451939.0,
+        "pctChange": 0.0128
+      }
+    ]
+  },
+  {
+    "symbol": "HD",
+    "name": "The Home Depot, Inc.",
+    "sector": "Consumer Disc",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 305.4,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 81578902,
+        "value": 24972116496.0,
+        "pctChange": 0.037100002
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 65076088,
+        "value": 19920440344.0,
+        "pctChange": 0.006
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 47175026,
+        "value": 14440746517.0,
+        "pctChange": 0.0107
+      }
+    ]
+  },
+  {
+    "symbol": "PG",
+    "name": "Procter & Gamble Co.",
+    "sector": "Consumer Staples",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 341.7,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 190003442,
+        "value": 27955207349.0,
+        "pctChange": 0.0159
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 152109741,
+        "value": 22379906936.0,
+        "pctChange": 0.0069999998
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 102216308,
+        "value": 15039085895.0,
+        "pctChange": 0.0095
+      }
+    ]
+  },
+  {
+    "symbol": "XOM",
+    "name": "Exxon Mobil Corporation",
+    "sector": "Energy",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 696.5,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 334746496,
+        "value": 56702708753.0,
+        "pctChange": 0.0372
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 270731921,
+        "value": 45859279932.0,
+        "pctChange": -0.0017
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 206811526,
+        "value": 35031804262.0,
+        "pctChange": -0.0332
+      }
+    ]
+  },
+  {
+    "symbol": "JNJ",
+    "name": "Johnson & Johnson",
+    "sector": "Healthcare",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 637.7,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 212098264,
+        "value": 56123318530.0,
+        "pctChange": -0.006
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 157226374,
+        "value": 41603668521.0,
+        "pctChange": 0.004
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 133776025,
+        "value": 35398472015.0,
+        "pctChange": 0.0022
+      }
+    ]
+  },
+  {
+    "symbol": "AMD",
+    "name": "Advanced Micro Devices",
+    "sector": "Technology",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 822.7,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 150301510,
+        "value": 75746190797.0,
+        "pctChange": 0.0325
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 106500177,
+        "value": 53672000547.0,
+        "pctChange": 0.0053
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 74361687,
+        "value": 37475435420.0,
+        "pctChange": -0.0055
+      }
+    ]
+  },
+  {
+    "symbol": "CRM",
+    "name": "Salesforce, Inc.",
+    "sector": "Technology",
+    "holders": 0,
+    "instPct": 0.0,
+    "valB": "N/A",
+    "mcapB": 213.3,
+    "topHolders": [
+      {
+        "holder": "Blackrock Inc.",
+        "shares": 72748909,
+        "value": 18855789901.0,
+        "pctChange": -0.0871
+      },
+      {
+        "holder": "Vanguard Capital Management LLC",
+        "shares": 52065228,
+        "value": 13494786572.0,
+        "pctChange": -0.1225
+      },
+      {
+        "holder": "State Street Corporation",
+        "shares": 44869478,
+        "value": 11629720112.0,
+        "pctChange": -0.0834
+      }
+    ]
+  }
+]

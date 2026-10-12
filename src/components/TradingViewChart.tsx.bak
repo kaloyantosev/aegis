@@ -1,0 +1,329 @@
+"use client";
+
+import { useEffect, useRef } from "react";
+import { createChart, ColorType, IChartApi, ISeriesApi, CandlestickSeries } from "lightweight-charts";
+
+interface Level {
+  price: number;
+  strength: number;
+}
+
+interface TradingViewChartProps {
+  ticker: string;
+  spot: number;
+  maxPain: number;
+  supports: Level[];
+  resistances: Level[];
+  timeframe: string;
+}
+
+export default function TradingViewChart({
+  ticker,
+  spot,
+  maxPain,
+  supports,
+  resistances,
+  timeframe,
+}: TradingViewChartProps) {
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candleSeriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
+  const priceLinesRef = useRef<any[]>([]);
+
+  useEffect(() => {
+    if (!chartContainerRef.current) return;
+
+    // Create TradingView Chart
+    const chart = createChart(chartContainerRef.current, {
+      layout: {
+        background: { type: ColorType.Solid, color: "#0a0a0a" },
+        textColor: "#a3a3a3",
+      },
+      grid: {
+        vertLines: { visible: false },
+        horzLines: { visible: false },
+      },
+      width: chartContainerRef.current.clientWidth,
+      height: 420,
+      timeScale: {
+        borderColor: "#262626",
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      rightPriceScale: {
+        borderColor: "#262626",
+      },
+    });
+
+    // Add Candlestick Series
+    const candleSeries = chart.addSeries(CandlestickSeries, {
+      upColor: "#D4A300",
+      borderUpColor: "#D4A300",
+      wickUpColor: "#D4A300",
+      downColor: "#F28C28",
+      borderDownColor: "#F28C28",
+      wickDownColor: "#F28C28",
+    });
+
+    chartRef.current = chart;
+    candleSeriesRef.current = candleSeries;
+
+    // Fetch and load candles data
+    const loadData = async () => {
+      try {
+        const res = await fetch(`http://127.0.0.1:8000/api/history/${ticker}?timeframe=${encodeURIComponent(timeframe)}`);
+        if (res.ok) {
+          const data = await res.json();
+          candleSeries.setData(data);
+          if (data.length > 0) {
+            let barsToShow = 84; // Default: ~84 daily trading bars (4 months)
+            if (timeframe === "4h") {
+              barsToShow = 170;
+            } else if (timeframe === "1h") {
+              barsToShow = 580;
+            } else if (timeframe === "15 min") {
+              barsToShow = 1500;
+            } else if (timeframe === "5 min") {
+              barsToShow = 4500;
+            }
+            chart.timeScale().setVisibleLogicalRange({
+              from: data.length - Math.min(barsToShow, data.length),
+              to: data.length - 1,
+            });
+          } else {
+            chart.timeScale().fitContent();
+          }
+        }
+      } catch (err) {
+        console.error("Failed to load chart history", err);
+      }
+    };
+
+    loadData();
+
+    // Responsive chart resizing
+    const handleResize = () => {
+      if (chartContainerRef.current && chartRef.current) {
+        chartRef.current.applyOptions({
+          width: chartContainerRef.current.clientWidth,
+        });
+      }
+    };
+
+    window.addEventListener("resize", handleResize);
+
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      chart.remove();
+    };
+  }, [ticker, timeframe]);
+
+  // Update horizontal lines when options positioning or support/resistance zones change
+  useEffect(() => {
+    const candleSeries = candleSeriesRef.current;
+    const chart = chartRef.current;
+    if (!candleSeries || !chart || !chartContainerRef.current) return;
+
+    // Clear previous lines
+    priceLinesRef.current.forEach((line) => {
+      try {
+        candleSeries.removePriceLine(line);
+      } catch (e) {
+        // ignore
+      }
+    });
+    priceLinesRef.current = [];
+
+    // 1. Plot Max Pain Level (1px Solid Orchid Purple: #ba68c8)
+    if (maxPain > 0) {
+      const maxPainLine = candleSeries.createPriceLine({
+        price: maxPain,
+        color: "#ba68c8",
+        lineWidth: 1,
+        lineStyle: 0, // Solid
+        axisLabelVisible: true,
+        title: "Max Pain",
+      });
+      priceLinesRef.current.push(maxPainLine);
+    }
+
+    // Determine major vs minor support levels based on absorption strength relative to peak support absorption
+    const maxSupportAbs = supports.length > 0 ? Math.max(...supports.map(s => s.strength)) : 1.0;
+    
+    // 3. Plot Support Levels (classified into Minor, Intermediate, and Major)
+    supports.forEach((sup) => {
+      let color = "rgba(16, 185, 129, 0.5)"; // Minor Support: Light Green
+      let lineWidth = 1;
+      let lineStyle = 1; // Dotted
+      let title = "Minor Sup";
+
+      const relStrength = sup.strength / maxSupportAbs;
+      if (relStrength >= 0.75) {
+        color = "rgba(0, 204, 102, 0.55)"; // Major Support: Light Green
+        lineWidth = 3;
+        lineStyle = 0; // Solid
+        title = "Major Sup";
+      } else if (relStrength >= 0.4) {
+        color = "rgba(0, 143, 76, 1.0)"; // Intermediate Support: Medium Green
+        lineWidth = 2;
+        lineStyle = 0; // Solid
+        title = "Int Sup";
+      }
+
+      const supportLine = candleSeries.createPriceLine({
+        price: sup.price,
+        color: color,
+        lineWidth: lineWidth,
+        lineStyle: lineStyle,
+        axisLabelVisible: true,
+        title: title,
+      });
+      priceLinesRef.current.push(supportLine);
+    });
+
+    // Determine major vs minor resistance levels based on absorption strength relative to peak resistance absorption
+    const maxResistanceAbs = resistances.length > 0 ? Math.max(...resistances.map(r => r.strength)) : 1.0;
+
+    // 4. Plot Resistance Levels (classified into Minor, Intermediate, and Major)
+    resistances.forEach((res) => {
+      let color = "rgba(239, 68, 68, 0.5)"; // Minor Resistance: Light Red
+      let lineWidth = 1;
+      let lineStyle = 1; // Dotted
+      let title = "Minor Res";
+
+      const relStrength = res.strength / maxResistanceAbs;
+      if (relStrength >= 0.75) {
+        color = "rgba(255, 51, 51, 0.55)"; // Major Resistance: Light Red
+        lineWidth = 3;
+        lineStyle = 0; // Solid
+        title = "Major Res";
+      } else if (relStrength >= 0.4) {
+        color = "rgba(211, 47, 47, 1.0)"; // Intermediate Resistance: Medium Red
+        lineWidth = 2;
+        lineStyle = 0; // Solid
+        title = "Int Res";
+      }
+
+      const resistanceLine = candleSeries.createPriceLine({
+        price: res.price,
+        color: color,
+        lineWidth: lineWidth,
+        lineStyle: lineStyle,
+        axisLabelVisible: true,
+        title: title,
+      });
+      priceLinesRef.current.push(resistanceLine);
+    });
+
+    // Tooltip Logic Y Y Y coordinate check Y Y
+    const container = chartContainerRef.current;
+    let tooltip = container.querySelector(".chart-level-tooltip") as HTMLDivElement;
+    if (!tooltip) {
+      tooltip = document.createElement("div");
+      tooltip.className = "chart-level-tooltip absolute hidden z-20 pointer-events-none bg-neutral-900/95 border border-purple-500/40 rounded p-2 text-[10px] font-mono text-neutral-200 shadow-xl min-w-[180px] max-w-[240px] backdrop-blur-sm";
+      container.appendChild(tooltip);
+    }
+
+    const onCrosshairMove = (param: any) => {
+      if (!param.point || !chartRef.current) {
+        tooltip.style.display = "none";
+        return;
+      }
+
+      const mouseY = param.point.y;
+      const mouseX = param.point.x;
+
+      const activeLevels: Array<{ price: number; title: string; desc: string }> = [];
+
+      if (maxPain > 0) {
+        activeLevels.push({
+          price: maxPain,
+          title: "Max Pain",
+          desc: `Price: $${maxPain.toFixed(2)}\nType: Option Dealer Wall`,
+        });
+      }
+
+      supports.forEach((sup) => {
+        const desc = sup.source === "options"
+          ? `Price: $${sup.price.toFixed(2)}\nAbsorbtion: ${Math.round(sup.strength)}\nType: Options (${sup.dte}d DTE)`
+          : `Price: $${sup.price.toFixed(2)}\nTests: ${sup.tests || 0}\nType: Technical`;
+        activeLevels.push({
+          price: sup.price,
+          title: `${sup.horizon ? sup.horizon.charAt(0).toUpperCase() + sup.horizon.slice(1) : ""} Support`,
+          desc,
+        });
+      });
+
+      resistances.forEach((res) => {
+        const desc = res.source === "options"
+          ? `Price: $${res.price.toFixed(2)}\nAbsorbtion: ${Math.round(res.strength)}\nType: Options (${res.dte}d DTE)`
+          : `Price: $${res.price.toFixed(2)}\nTests: ${res.tests || 0}\nType: Technical`;
+        activeLevels.push({
+          price: res.price,
+          title: `${res.horizon ? res.horizon.charAt(0).toUpperCase() + res.horizon.slice(1) : ""} Resistance`,
+          desc,
+        });
+      });
+
+      let hoveredLevel = null;
+      let minDistance = 8; // Y-pixel tolerance for hover
+
+      for (const lvl of activeLevels) {
+        const levelY = candleSeries.priceToCoordinate(lvl.price);
+        if (levelY === null) continue;
+
+        const distance = Math.abs(mouseY - levelY);
+        if (distance < minDistance) {
+          minDistance = distance;
+          hoveredLevel = lvl;
+        }
+      }
+
+      if (hoveredLevel) {
+        tooltip.style.display = "block";
+        tooltip.innerHTML = `
+          <div class="font-bold text-purple-400 mb-0.5">${hoveredLevel.title}</div>
+          <div class="whitespace-pre-line text-neutral-300 leading-normal">${hoveredLevel.desc}</div>
+        `;
+        
+        const tooltipWidth = tooltip.offsetWidth || 180;
+        const tooltipHeight = tooltip.offsetHeight || 60;
+        
+        let left = mouseX + 15;
+        if (left + tooltipWidth > container.clientWidth) {
+          left = mouseX - tooltipWidth - 15;
+        }
+        
+        let top = mouseY - tooltipHeight - 15;
+        if (top < 0) {
+          top = mouseY + 15;
+        }
+
+        tooltip.style.left = `${left}px`;
+        tooltip.style.top = `${top}px`;
+      } else {
+        tooltip.style.display = "none";
+      }
+    };
+
+    chart.subscribeCrosshairMove(onCrosshairMove);
+
+    return () => {
+      chart.unsubscribeCrosshairMove(onCrosshairMove);
+      try {
+        tooltip.remove();
+      } catch (e) {}
+    };
+
+  }, [maxPain, supports, resistances]);
+
+  return (
+    <div className="w-full bg-neutral-950 rounded-lg p-2 border border-neutral-900 overflow-hidden relative">
+      <div className="absolute top-4 left-4 z-10 flex gap-2 items-center bg-neutral-900/60 backdrop-blur px-2.5 py-1 rounded border border-neutral-800/40">
+        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+        <span className="text-xs font-mono font-semibold tracking-wider text-neutral-300">LIVE FEED</span>
+      </div>
+      <div ref={chartContainerRef} className="w-full" />
+    </div>
+  );
+}

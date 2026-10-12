@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "TrueCharts TradingView Sync",
+  "version": "1.0",
+  "description": "Syncs options data levels and trade ideas from your Render backend directly to TradingView.",
+  "permissions": [
+    "activeTab"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://*.tradingview.com/chart*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

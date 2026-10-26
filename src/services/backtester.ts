@@ -332,13 +332,7 @@ export const backtester = {
     let cStrongBuy  = 0;
     let cBuy        = 0;
 
-    let cExitExtreme = 0;
-    let cExitHeavy   = 0;
-    let cExitStrong  = 0;
-    let cExitBuy     = 0;
-
     let extremeBuyLockDays = 0;
-    let neutralLockoutDays = 0;
     let bearLockoutDays    = 0;
 
     let bearMode        = false;
@@ -346,6 +340,8 @@ export const backtester = {
     let peakUsi         = 0;
     let daysInBuy       = 0;
     let climaxTriggered = false;
+    let minUsiInTrade   = 99999;
+    let daysInHighBeta  = 0;
 
     // ── MAIN LOOP ────────────────────────────────────────────────────────────
     let firstDay = true;
@@ -363,11 +359,22 @@ export const backtester = {
       }
 
       if (extremeBuyLockDays > 0) extremeBuyLockDays--;
-      if (neutralLockoutDays > 0) neutralLockoutDays--;
       if (bearLockoutDays > 0)    bearLockoutDays--;
 
       if (usi >= USI_BUY_FLOOR) daysInBuy++;
       else if (usi < 120) daysInBuy = 0;
+
+      const sma5     = fullUsiSma5[absIdx];
+      const sma10    = fullUsiSma10[absIdx];
+      const sma20    = fullUsiSma20[absIdx];
+      const sma30    = fullUsiSma30[absIdx];
+      const sma50    = fullUsiSma50[absIdx];
+      const sma100   = fullUsiSma100[absIdx];
+      const prevUsi  = fullUsi[Math.max(0, absIdx - 1)];
+      const prevSma5 = fullUsiSma5[Math.max(0, absIdx - 1)];
+      const spyClose = spyCloses[absIdx] || 1;
+      const spyH     = spyHigh252[absIdx] || spyClose;
+      const spyDd    = Math.max(0, (spyH - spyClose) / (spyH || 1));
 
       let targetId = activePortfolioId;
       let reason   = '';
@@ -376,25 +383,12 @@ export const backtester = {
       let handledByBearEngine = false;
 
       if (useBearShield) {
-        const sma5    = fullUsiSma5[absIdx];
-        const sma10   = fullUsiSma10[absIdx];
-        const sma20   = fullUsiSma20[absIdx];
-        const sma30   = fullUsiSma30[absIdx];
-        const sma50   = fullUsiSma50[absIdx];
-        const sma100  = fullUsiSma100[absIdx];
-        const prevUsi  = fullUsi[Math.max(0, absIdx - 1)];
-        const prevSma5 = fullUsiSma5[Math.max(0, absIdx - 1)];
-
         // Dynamic Lockout Reset:
         // bearLockoutDays prevents whipsawing back into Bear Shield during the SAME capitulation cluster (e.g. Oct-Nov 2008).
         // Once USI cools below 260 (meaning the capitulation bounce has completed, e.g., Aug 2022), clear the lockout so we are ready if a new Bear Wave starts!
         if (bearLockoutDays > 0 && usi < 260) {
           bearLockoutDays = 0;
         }
-
-        const spyClose = spyCloses[absIdx] || 1;
-        const spyH     = spyHigh252[absIdx] || spyClose;
-        const spyDd    = Math.max(0, (spyH - spyClose) / (spyH || 1));
 
         // 1. Multi-Wave / Structural Bear & Correction (e.g. April, Aug & Dec 2022 Waves, Summer 2008):
         //    - SPY is in a confirmed structural downtrend (Death Cross: SMA50 < SMA200 * 0.98, below 200-SMA, and DD >= 12.5%)
@@ -461,7 +455,9 @@ export const backtester = {
             bearMode            = false;
             climaxTriggered     = true;
             bearLockoutDays     = 65; // Lockout during active capitulation cluster; clears early once USI cools < 260
-            extremeBuyLockDays  = 10; // Hold Extreme Buy for initial bottom rebound, then let ladder step down naturally!
+            extremeBuyLockDays  = 10;
+            minUsiInTrade       = usi;
+            daysInHighBeta      = 0;
             daysInBuy           = 0;
             targetId            = 'extreme-buy';
             reason              = `USI=${usi.toFixed(0)} Capitulation Peak Exhaustion (Peak USI=${peakUsi.toFixed(0)}, Cooling < SMA5=${sma5.toFixed(0)}) — Seize V-Bottom in Extreme Buy`;
@@ -484,64 +480,96 @@ export const backtester = {
         }
       }
 
-      // ── STANDARD DIP-BUYING LADDER (When not overridden by Bear Shield) ────
+      // ── BULLISH DIVERGENCE HOLD & DIP-BUYING LADDER ────────────────────────
       if (!handledByBearEngine) {
+        const inHighBeta =
+          activePortfolioId === 'extreme-buy' ||
+          activePortfolioId === 'heavy-buy' ||
+          activePortfolioId === 'strong-buy';
+
+        if (inHighBeta) {
+          daysInHighBeta++;
+          // Record the lowest stress level once 5-day average stress has cooled below Buy floor (187.95)
+          if (sma5 < USI_BUY_FLOOR && usi < minUsiInTrade) {
+            minUsiInTrade = usi;
+          }
+        } else {
+          minUsiInTrade  = 99999;
+          daysInHighBeta = 0;
+        }
+
         cExtremeBuy = usi >= USI_EXTREME_FLOOR                          ? cExtremeBuy + 1 : 0;
         cHeavyBuy   = usi >= USI_HEAVY_FLOOR && usi < USI_EXTREME_FLOOR ? cHeavyBuy   + 1 : 0;
         cStrongBuy  = usi >= USI_STRONG_FLOOR && usi < USI_HEAVY_FLOOR  ? cStrongBuy  + 1 : 0;
         cBuy        = usi >= USI_BUY_FLOOR    && usi < USI_STRONG_FLOOR ? cBuy        + 1 : 0;
 
-        cExitExtreme = activePortfolioId === 'extreme-buy' && usi < USI_EXTREME_FLOOR ? cExitExtreme + 1 : 0;
-        cExitHeavy   = activePortfolioId === 'heavy-buy'   && usi < USI_HEAVY_FLOOR   ? cExitHeavy   + 1 : 0;
-        cExitStrong  = activePortfolioId === 'strong-buy'  && usi < USI_STRONG_FLOOR  ? cExitStrong  + 1 : 0;
-        cExitBuy     = activePortfolioId === 'buy'         && usi < USI_BUY_FLOOR     ? cExitBuy     + 1 : 0;
+        const tierRank: { [id: string]: number } = {
+          'bear-shield': -1,
+          'neutral':      0,
+          'buy':          1,
+          'strong-buy':   2,
+          'heavy-buy':    3,
+          'extreme-buy':  4,
+        };
+        const curRank = tierRank[activePortfolioId] ?? 0;
 
-        if (cExtremeBuy >= 2) {
-          if (activePortfolioId !== 'extreme-buy') {
-            extremeBuyLockDays = 15;
+        // When waiting in Neutral after locking in a Bear Market Rally during a deep chronic Bear Market (SMA50 >= 400 & SMA100 >= 400),
+        // stay in Neutral until Bear Shield triggers or the macro downtrend clears.
+        const inDeepBearWait =
+          spySma50[absIdx] < spySma200[absIdx] * 0.98 &&
+          spyClose <= spySma200[absIdx] * 1.015 &&
+          sma50 >= 400 &&
+          sma100 >= 400 &&
+          activePortfolioId === 'neutral';
+
+        if (!inDeepBearWait && cExtremeBuy >= 2 && curRank < 4) {
+          targetId           = 'extreme-buy';
+          reason             = `USI=${usi.toFixed(0)} ≥ ${USI_EXTREME_FLOOR} for 2 consecutive closes — Upgrade to Extreme Buy`;
+          extremeBuyLockDays = 15;
+          minUsiInTrade      = 99999;
+        } else if (!inDeepBearWait && cHeavyBuy >= 2 && curRank < 3) {
+          targetId      = 'heavy-buy';
+          reason        = `USI=${usi.toFixed(0)} ≥ ${USI_HEAVY_FLOOR} for 2 consecutive closes — Upgrade to Heavy Buy`;
+          minUsiInTrade = 99999;
+        } else if (!inDeepBearWait && cStrongBuy >= 2 && curRank < 2) {
+          targetId      = 'strong-buy';
+          reason        = `USI=${usi.toFixed(0)} ≥ ${USI_STRONG_FLOOR} for 2 consecutive closes — Upgrade to Strong Buy`;
+          minUsiInTrade = 99999;
+        } else if (!inDeepBearWait && cBuy >= 2 && curRank < 1) {
+          targetId = 'buy';
+          reason   = `USI=${usi.toFixed(0)} ≥ ${USI_BUY_FLOOR} for 2 consecutive closes — Upgrade to Buy`;
+        } else if (curRank >= 2) {
+          // BULLISH DIVERGENCE HOLD (Inverse Relationship between Falling USI & Rising SPY):
+          // Do NOT downgrade step-by-step while USI is falling and SPY is rising!
+          // Stay in Strong Buy / Heavy Buy / Extreme Buy until:
+          // 1) A serious upward stress spike occurs from low/cooled stress levels (USI >= max(165, minUsi + 95)), OR
+          // 2) In a deep chronic Bear Market (SMA50 & SMA100 >= 400), the Bear Market Rally cools below 225 near the 200-SMA resistance.
+          const targetSpike = Math.max(165, minUsiInTrade + 95);
+          const isSharpSpikeFromLow =
+            minUsiInTrade < 165 &&
+            usi >= targetSpike &&
+            usi > prevUsi &&
+            (sma5 > sma20 || (usi > sma10 * 1.25 && sma5 > prevSma5));
+
+          const isBearRallyProfitLock =
+            spySma50[absIdx] < spySma200[absIdx] * 0.98 &&
+            spyClose <= spySma200[absIdx] * 1.015 &&
+            sma50 >= 400 &&
+            sma100 >= 400 &&
+            daysInHighBeta >= 15 &&
+            usi < 225 &&
+            spyClose > spySma50[absIdx];
+
+          if (isSharpSpikeFromLow) {
+            targetId = 'neutral';
+            reason   = `USI=${usi.toFixed(0)} Stress Spike from Cooled Level (Min USI=${minUsiInTrade.toFixed(0)} → ${usi.toFixed(0)}) — Divergence Ended → Neutral`;
+          } else if (isBearRallyProfitLock) {
+            targetId = 'neutral';
+            reason   = `USI=${usi.toFixed(0)} Bear Rally Divergence Completed (SPY > SMA50, USI < 225) — Lock Profit → Neutral`;
           }
-          targetId = 'extreme-buy';
-          reason   = `USI=${usi.toFixed(0)} ≥ ${USI_EXTREME_FLOOR} for 2 consecutive closes — Extreme Buy`;
-        } else if (cHeavyBuy >= 2) {
-          targetId = 'heavy-buy';
-          reason   = `USI=${usi.toFixed(0)} ≥ ${USI_HEAVY_FLOOR} for 2 consecutive closes — Heavy Buy`;
-        } else if (cStrongBuy >= 2) {
-          targetId = 'strong-buy';
-          reason   = `USI=${usi.toFixed(0)} ≥ ${USI_STRONG_FLOOR} for 2 consecutive closes — Strong Buy`;
-        } else if (cBuy >= 2) {
-          targetId = 'buy';
-          reason   = `USI=${usi.toFixed(0)} ≥ ${USI_BUY_FLOOR} for 2 consecutive closes — Buy`;
-        } else if (cExitExtreme >= 2 && extremeBuyLockDays === 0) {
-          targetId = 'heavy-buy';
-          reason   = `USI=${usi.toFixed(0)} below ${USI_EXTREME_FLOOR} for 2 consecutive closes — Extreme Buy → Heavy Buy`;
-          cExitExtreme = 0;
-        } else if (cExitHeavy >= 2) {
-          targetId = 'strong-buy';
-          reason   = `USI=${usi.toFixed(0)} below ${USI_HEAVY_FLOOR} for 2 consecutive closes — Heavy Buy → Strong Buy`;
-          cExitHeavy = 0;
-        } else if (cExitStrong >= 2) {
-          targetId = 'buy';
-          reason   = `USI=${usi.toFixed(0)} below ${USI_STRONG_FLOOR} for 2 consecutive closes — Strong Buy → Buy`;
-          cExitStrong = 0;
-        } else if (cExitBuy >= 2) {
+        } else if (curRank === 1 && usi < 120) {
           targetId = 'neutral';
-          reason   = `USI=${usi.toFixed(0)} below ${USI_BUY_FLOOR} for 2 consecutive closes — Buy → Neutral`;
-          cExitBuy = 0;
-        }
-
-        const isBuySignalFromNeutral =
-          activePortfolioId === 'neutral' &&
-          (targetId === 'buy' || targetId === 'strong-buy' || targetId === 'heavy-buy' || targetId === 'extreme-buy');
-        if (isBuySignalFromNeutral) {
-          neutralLockoutDays = 20;
-        }
-
-        if (targetId === 'neutral' && neutralLockoutDays > 0) {
-          targetId = 'buy';
-        }
-
-        if (activePortfolioId === 'extreme-buy' && extremeBuyLockDays > 0) {
-          targetId = 'extreme-buy';
+          reason   = `USI=${usi.toFixed(0)} < 120 — Exit Buy → Neutral`;
         }
       }
 

@@ -206,11 +206,12 @@ export const backtester = {
     // ── PRE-COMPUTE FULL USI & USI MOVING AVERAGES FOR BEAR DETECTION ────────
     const allDates = benchmarkData.map(p => p.date);
     const fullUsi  = allDates.map(d => computeUSI(d));
-    const fullUsiSma5  = calculateSMA(fullUsi, 5);
-    const fullUsiSma10 = calculateSMA(fullUsi, 10);
-    const fullUsiSma20 = calculateSMA(fullUsi, 20);
-    const fullUsiSma30 = calculateSMA(fullUsi, 30);
-    const fullUsiSma50 = calculateSMA(fullUsi, 50);
+    const fullUsiSma5   = calculateSMA(fullUsi, 5);
+    const fullUsiSma10  = calculateSMA(fullUsi, 10);
+    const fullUsiSma20  = calculateSMA(fullUsi, 20);
+    const fullUsiSma30  = calculateSMA(fullUsi, 30);
+    const fullUsiSma50  = calculateSMA(fullUsi, 50);
+    const fullUsiSma100 = calculateSMA(fullUsi, 100);
 
     // ── TRADING DATES ────────────────────────────────────────────────────────
     const benchmarkMap    = dateIndexMaps[benchmarkTicker];
@@ -375,40 +376,60 @@ export const backtester = {
       let handledByBearEngine = false;
 
       if (useBearShield) {
-        const sma5  = fullUsiSma5[absIdx];
-        const sma10 = fullUsiSma10[absIdx];
-        const sma20 = fullUsiSma20[absIdx];
-        const sma30 = fullUsiSma30[absIdx];
-        const sma50 = fullUsiSma50[absIdx];
-        const prevUsi = fullUsi[Math.max(0, absIdx - 1)];
+        const sma5    = fullUsiSma5[absIdx];
+        const sma10   = fullUsiSma10[absIdx];
+        const sma20   = fullUsiSma20[absIdx];
+        const sma30   = fullUsiSma30[absIdx];
+        const sma50   = fullUsiSma50[absIdx];
+        const sma100  = fullUsiSma100[absIdx];
+        const prevUsi  = fullUsi[Math.max(0, absIdx - 1)];
         const prevSma5 = fullUsiSma5[Math.max(0, absIdx - 1)];
 
-        // Compute SPY Drawdown from 52-week high for bear regime filtering
+        // Dynamic Lockout Reset:
+        // bearLockoutDays prevents whipsawing back into Bear Shield during the SAME capitulation cluster (e.g. Oct-Nov 2008).
+        // Once USI cools below 260 (meaning the capitulation bounce has completed, e.g., Aug 2022), clear the lockout so we are ready if a new Bear Wave starts!
+        if (bearLockoutDays > 0 && usi < 260) {
+          bearLockoutDays = 0;
+        }
+
         const spyClose = spyCloses[absIdx] || 1;
         const spyH     = spyHigh252[absIdx] || spyClose;
         const spyDd    = Math.max(0, (spyH - spyClose) / (spyH || 1));
 
-        // 1. Structural Bear (e.g. 2008 & 2022):
-        //    Requires SPY Drawdown >= 16%, chronic sustained fear (daysInBuy >= 25, SMA50 >= 300),
-        //    elevated USI >= 700, and accelerating momentum (SMA5 > 1.05 * SMA20).
-        //    Does NOT trigger during routine dips or minor 10-14% corrections!
-        const triggerStructuralBear =
-          bearLockoutDays === 0 &&
-          spyDd >= 0.16 &&
-          daysInBuy >= 25 &&
-          sma50 >= 300 &&
-          usi >= 700 &&
-          sma5 > sma20 * 1.05;
+        // 1. Multi-Wave / Structural Bear & Correction (e.g. April, Aug & Dec 2022 Waves, Summer 2008):
+        //    - SPY is in a confirmed structural downtrend (Death Cross: SMA50 < SMA200 * 0.98, below 200-SMA, and DD >= 12.5%)
+        //    - Background fear memory is already primed from a prior wave (SMA50 >= 175 or SMA100 >= 135)
+        //    - A new fear wave surges UP into the 480..680 zone (catching the wave at the START before Extreme Buy takes a drawdown, never panic-selling on the way down or after USI > 680!)
+        const isStructuralDowntrend =
+          spyClose < spySma200[absIdx] &&
+          spySma50[absIdx] < spySma200[absIdx] * 0.98 &&
+          spyDd >= 0.125;
 
-        // 2. Black Swan / Acute Bear Crash (e.g. March 2020):
-        //    Official Bear Market DD >= 20% accompanied by an extreme panic shock (USI >= 2000 & SMA5 > 2.2 * SMA20)
+        const isWaveStarting =
+          usi >= 480 &&
+          usi <= 680 &&
+          usi > prevUsi &&
+          sma5 > prevSma5 &&
+          (sma5 > sma20 * 1.15 || (usi > sma20 * 1.05 && usi > sma5 * 1.30));
+
+        const triggerMultiWaveBear =
+          bearLockoutDays === 0 &&
+          isStructuralDowntrend &&
+          (sma50 >= 175 || sma100 >= 135) &&
+          isWaveStarting;
+
+        // 2. Acute Black Swan Crash Velocity (e.g. Feb 27 / March 2020):
+        //    Sudden vertical crash from a calm bull market: SPY breaks below 200-SMA with DD >= 12%,
+        //    while 5-day fear explodes > 2.45x above 20-day fear (USI >= 680 while SMA50 < 100, catching the crash at the START!)
         const triggerAcuteCrash =
           bearLockoutDays === 0 &&
-          spyDd >= 0.20 &&
-          usi >= 2000 &&
-          sma5 > sma20 * 2.2;
+          spyClose < spySma200[absIdx] &&
+          spyDd >= 0.12 &&
+          usi >= 680 &&
+          sma50 < 100 &&
+          sma5 > sma20 * 2.45;
 
-        if (!bearMode && (triggerStructuralBear || triggerAcuteCrash)) {
+        if (!bearMode && (triggerMultiWaveBear || triggerAcuteCrash)) {
           bearMode           = true;
           bearDays           = 0;
           peakUsi            = usi;
@@ -416,40 +437,40 @@ export const backtester = {
           climaxTriggered    = false;
           targetId           = 'bear-shield';
           reason             = triggerAcuteCrash
-            ? `USI=${usi.toFixed(0)} Acute Bear Crash (DD=${(spyDd * 100).toFixed(1)}%, USI ≥ 2000) — Crash Protection (Bear Shield)`
-            : `USI=${usi.toFixed(0)} Structural Bear Market (DD=${(spyDd * 100).toFixed(1)}%, Chronic Fear SMA50=${sma50.toFixed(0)}, Days=${daysInBuy}) — Bear Shield Activated`;
+            ? `USI=${usi.toFixed(0)} Acute Crash Shock (DD=${(spyDd * 100).toFixed(1)}%, SMA5 > 2.45×SMA20) — Crash Protection (Bear Shield)`
+            : `USI=${usi.toFixed(0)} Multi-Wave Structural Bear (DD=${(spyDd * 100).toFixed(1)}%, SMA50=${sma50.toFixed(0)}, SMA100=${sma100.toFixed(0)}) — Bear Shield Activated`;
           handledByBearEngine = true;
         } else if (bearMode) {
           bearDays++;
           peakUsi = Math.max(peakUsi, usi);
 
           // Capitulation Spike Exhaustion:
-          // A violent panic peak occurred (peakUsi >= 2000), followed by 2 consecutive days of cooling below SMA5
-          // with SMA5 turning downwards — the capitulation exhaustion signal!
+          // A violent panic peak occurred (peakUsi >= 2000, e.g., June 2022 [2100], Sept/Oct 2022 [2106], March 2020 [4649], Oct 2008 [7823]),
+          // followed by 2 consecutive days of cooling below SMA5 with SMA5 turning downwards!
           const isCapitulationSpike =
             peakUsi >= 2000 &&
-            bearDays >= 8 &&
+            bearDays >= 6 &&
             usi < sma5 * 0.82 &&
             prevUsi < prevSma5 * 0.88 &&
             sma5 < prevSma5;
 
           // Normalization Exit: Fear quietly subsides below 188 with negative momentum
-          const isNormalized = bearDays >= 8 && usi < USI_BUY_FLOOR && sma10 < sma30;
+          const isNormalized = bearDays >= 6 && usi < USI_BUY_FLOOR && sma10 < sma30;
 
           if (isCapitulationSpike) {
-            bearMode           = false;
-            climaxTriggered    = true;
-            bearLockoutDays    = 80; // 80 trading days (~4 months) lockout: stay in high-beta recovery, no whipsaw!
-            extremeBuyLockDays = 30;
-            daysInBuy          = 0;
-            targetId           = 'extreme-buy';
-            reason             = `USI=${usi.toFixed(0)} Capitulation Peak Exhaustion (Peak USI=${peakUsi.toFixed(0)}, Cooling < SMA5=${sma5.toFixed(0)}) — Seize V-Bottom in Extreme Buy`;
+            bearMode            = false;
+            climaxTriggered     = true;
+            bearLockoutDays     = 65; // Lockout during active capitulation cluster; clears early once USI cools < 260
+            extremeBuyLockDays  = 10; // Hold Extreme Buy for initial bottom rebound, then let ladder step down naturally!
+            daysInBuy           = 0;
+            targetId            = 'extreme-buy';
+            reason              = `USI=${usi.toFixed(0)} Capitulation Peak Exhaustion (Peak USI=${peakUsi.toFixed(0)}, Cooling < SMA5=${sma5.toFixed(0)}) — Seize V-Bottom in Extreme Buy`;
             handledByBearEngine = true;
           } else if (isNormalized) {
-            bearMode           = false;
-            daysInBuy          = 0;
-            targetId           = 'neutral';
-            reason             = `USI=${usi.toFixed(0)} < ${USI_BUY_FLOOR} & SMA10 < SMA30 — Bear Regime Normalized → Neutral`;
+            bearMode            = false;
+            daysInBuy           = 0;
+            targetId            = 'neutral';
+            reason              = `USI=${usi.toFixed(0)} < ${USI_BUY_FLOOR} & SMA10 < SMA30 — Bear Regime Normalized → Neutral`;
             handledByBearEngine = true;
           } else {
             // Stay firmly locked in Bear Shield throughout the structural drop
@@ -476,9 +497,11 @@ export const backtester = {
         cExitBuy     = activePortfolioId === 'buy'         && usi < USI_BUY_FLOOR     ? cExitBuy     + 1 : 0;
 
         if (cExtremeBuy >= 2) {
+          if (activePortfolioId !== 'extreme-buy') {
+            extremeBuyLockDays = 15;
+          }
           targetId = 'extreme-buy';
           reason   = `USI=${usi.toFixed(0)} ≥ ${USI_EXTREME_FLOOR} for 2 consecutive closes — Extreme Buy`;
-          extremeBuyLockDays = 30;
         } else if (cHeavyBuy >= 2) {
           targetId = 'heavy-buy';
           reason   = `USI=${usi.toFixed(0)} ≥ ${USI_HEAVY_FLOOR} for 2 consecutive closes — Heavy Buy`;
@@ -488,7 +511,7 @@ export const backtester = {
         } else if (cBuy >= 2) {
           targetId = 'buy';
           reason   = `USI=${usi.toFixed(0)} ≥ ${USI_BUY_FLOOR} for 2 consecutive closes — Buy`;
-        } else if (cExitExtreme >= 2) {
+        } else if (cExitExtreme >= 2 && extremeBuyLockDays === 0) {
           targetId = 'heavy-buy';
           reason   = `USI=${usi.toFixed(0)} below ${USI_EXTREME_FLOOR} for 2 consecutive closes — Extreme Buy → Heavy Buy`;
           cExitExtreme = 0;
@@ -510,7 +533,7 @@ export const backtester = {
           activePortfolioId === 'neutral' &&
           (targetId === 'buy' || targetId === 'strong-buy' || targetId === 'heavy-buy' || targetId === 'extreme-buy');
         if (isBuySignalFromNeutral) {
-          neutralLockoutDays = 30;
+          neutralLockoutDays = 20;
         }
 
         if (targetId === 'neutral' && neutralLockoutDays > 0) {

@@ -125,8 +125,11 @@ const RULES = [
 
 // ── APP ────────────────────────────────────────────────────────────────────────
 export default function App() {
+  const cachedTickers = dataService.getAllCachedData();
+  const latestDateAvailable = cachedTickers[CONFIG.benchmarkTicker]?.[cachedTickers[CONFIG.benchmarkTicker]?.length - 1]?.date || '2026-10-26';
+
   const [startDate, setStartDate]             = useState('2006-01-03');
-  const [endDate, setEndDate]                 = useState('2026-06-30');
+  const [endDate, setEndDate]                 = useState(latestDateAvailable);
   const [useTop10Neutral, setUseTop10Neutral] = useState(true);
   const [useBearShield, setUseBearShield]     = useState(true);
   const [useAggroDips, setUseAggroDips]       = useState(true);
@@ -186,7 +189,7 @@ export default function App() {
 
   const handleSelectYear = (year: number) => {
     const start = `${year}-01-01`;
-    const end = `${year}-12-31`;
+    const end = year === 2026 ? latestDateAvailable : `${year}-12-31`;
     setStartDate(start);
     setEndDate(end);
     runBacktest(start, end, useTop10Neutral, useBearShield, useAggroDips);
@@ -194,7 +197,7 @@ export default function App() {
 
   const handleResetRange = () => {
     const start = '2006-01-03';
-    const end = '2026-06-30';
+    const end = latestDateAvailable;
     setStartDate(start);
     setEndDate(end);
     runBacktest(start, end, useTop10Neutral, useBearShield, useAggroDips);

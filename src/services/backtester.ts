@@ -288,7 +288,6 @@ export const backtester = {
         const sh2026  = anchors[anchors.length - 1];
         const mcap    = price * sh2026;
         const r21     = price / (c[Math.max(0, idx - 21)]  || price) - 1;
-        const r42     = price / (c[Math.max(0, idx - 42)]  || price) - 1;
         const r63     = price / (c[Math.max(0, idx - 63)]  || price) - 1;
         const r126    = price / (c[Math.max(0, idx - 126)] || price) - 1;
         const r252    = price / (c[Math.max(0, idx - 252)] || price) - 1;
@@ -296,7 +295,7 @@ export const backtester = {
         const s100    = stockSma100[ticker][idx] || price;
         const s200    = stockSma200[ticker][idx] || price;
         const mom     = r63 * 0.40 + r126 * 0.35 + r252 * 0.25;
-        const crashPenalty = ((r21 < -0.12 || r42 < -0.14) && price < s50) ? 0.35 : 1.0;
+        const crashPenalty = (r21 < -0.14 && price < s50) ? 0.4 : 1.0;
         const trend   = (price >= s100 ? 1.25 : 0.6) * (price >= s200 ? 1.25 : 0.5) * crashPenalty;
         const score   = Math.pow(mcap, 0.35) * Math.max(0.05, 1 + mom * 3.0) * trend;
         ranked.push({ ticker, score });

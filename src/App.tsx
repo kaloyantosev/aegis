@@ -61,9 +61,9 @@ const CLASSIC_PORTFOLIOS: Portfolio[] = [
   },
   {
     id: 'bear-shield', name: 'Bear Shield',
-    description: '60% BIL (T-Bills Cash), 40% GLD (Gold) — Bear Market / Correction Protection',
+    description: '75% BIL (T-Bills Cash), 25% GLD (Gold) — Bear Market / Correction Protection',
     assets: [
-      { ticker: 'BIL', weight: 60 }, { ticker: 'GLD', weight: 40 },
+      { ticker: 'BIL', weight: 75 }, { ticker: 'GLD', weight: 25 },
     ],
   },
 ];
@@ -71,7 +71,7 @@ const CLASSIC_PORTFOLIOS: Portfolio[] = [
 const AGGRESSIVE_PORTFOLIOS: Portfolio[] = [
   {
     id: 'neutral', name: 'Neutral (US Top 10)',
-    description: 'Top 10 Largest US Companies (10% Equal Weight, Monthly Reallocation)',
+    description: 'Top 10 US Mega-Cap & Momentum Leaders (10% Equal Weight, Monthly Reallocation)',
     assets: [
       { ticker: 'SPY', weight: 50 }, { ticker: 'XLK', weight: 30 },
       { ticker: 'DBC', weight: 10 }, { ticker: 'XLF', weight: 10 },
@@ -79,39 +79,41 @@ const AGGRESSIVE_PORTFOLIOS: Portfolio[] = [
   },
   {
     id: 'buy', name: 'Buy',
-    description: '40% XLK, 30% QQQ, 15% XLG, 15% TQQQ — High-Beta Dip Entry',
+    description: '40% SPY, 35% XLK, 20% QQQ, 5% TQQQ — Low-Volatility Dip Entry',
     assets: [
-      { ticker: 'XLK', weight: 40 }, { ticker: 'QQQ', weight: 30 },
-      { ticker: 'XLG', weight: 15 }, { ticker: 'TQQQ', weight: 15 },
+      { ticker: 'SPY', weight: 40 }, { ticker: 'XLK', weight: 35 },
+      { ticker: 'QQQ', weight: 20 }, { ticker: 'TQQQ', weight: 5 },
     ],
   },
   {
     id: 'strong-buy', name: 'Strong Buy',
-    description: '40% XLK, 25% QQQ, 35% TQQQ — Accelerated Dip Leverage',
+    description: '28% SPY, 35% XLK, 25% QQQ, 12% TQQQ — Controlled Dip Leverage',
     assets: [
-      { ticker: 'XLK', weight: 40 }, { ticker: 'QQQ', weight: 25 },
-      { ticker: 'TQQQ', weight: 35 },
+      { ticker: 'SPY', weight: 28 }, { ticker: 'XLK', weight: 35 },
+      { ticker: 'QQQ', weight: 25 }, { ticker: 'TQQQ', weight: 12 },
     ],
   },
   {
     id: 'heavy-buy', name: 'Heavy Buy',
-    description: '45% XLK, 55% TQQQ — Deep Panic Leverage',
+    description: '20% SPY, 35% XLK, 25% QQQ, 20% TQQQ — Balanced Panic Leverage',
     assets: [
-      { ticker: 'XLK', weight: 45 }, { ticker: 'TQQQ', weight: 55 },
+      { ticker: 'SPY', weight: 20 }, { ticker: 'XLK', weight: 35 },
+      { ticker: 'QQQ', weight: 25 }, { ticker: 'TQQQ', weight: 20 },
     ],
   },
   {
     id: 'extreme-buy', name: 'Extreme Buy',
-    description: '75% TQQQ, 25% XLK — Maximum Capitulation Recovery Velocity',
+    description: '10% SPY, 32% XLK, 20% QQQ, 38% TQQQ — Risk-Controlled Capitulation Recovery',
     assets: [
-      { ticker: 'TQQQ', weight: 75 }, { ticker: 'XLK', weight: 25 },
+      { ticker: 'SPY', weight: 10 }, { ticker: 'XLK', weight: 32 },
+      { ticker: 'QQQ', weight: 20 }, { ticker: 'TQQQ', weight: 38 },
     ],
   },
   {
     id: 'bear-shield', name: 'Bear Shield',
-    description: '60% BIL (T-Bills Cash), 40% GLD (Gold) — Systemic Bear & Correction Shield',
+    description: '75% BIL (T-Bills Cash), 25% GLD (Gold) — Systemic Bear & Correction Shield',
     assets: [
-      { ticker: 'BIL', weight: 60 }, { ticker: 'GLD', weight: 40 },
+      { ticker: 'BIL', weight: 75 }, { ticker: 'GLD', weight: 25 },
     ],
   },
 ];

@@ -40,10 +40,8 @@ function buildDateIndex(series: { date: string }[]): Map<string, number> {
   return map;
 }
 
-// ── US TOP 10 MARKET CAP ENGINE (2006–2026) ───────────────────────────────────
-// Historical split-adjusted shares outstanding (in billions) at anchor years
-const ANCHOR_YEARS = [2006, 2008, 2010, 2014, 2018, 2022, 2026];
-
+// ── US TOP 10 MARKET CAP & MOMENTUM ENGINE (2006–2026) ───────────────────────
+// Split-adjusted shares outstanding (in billions) for US mega-cap universe
 const SHARE_ANCHORS: { [ticker: string]: number[] } = {
   'AAPL':  [24.5, 25.0, 25.8, 24.5, 20.0, 16.3, 15.1],
   'MSFT':  [10.2,  9.3,  8.8,  8.3,  7.7,  7.5,  7.43],
@@ -78,33 +76,18 @@ const SHARE_ANCHORS: { [ticker: string]: number[] } = {
   'T':     [ 3.9,  6.0,  5.9,  5.2,  7.2,  7.15, 7.15],
 };
 
-function getHistoricalShares(ticker: string, dateStr: string): number {
-  const anchors = SHARE_ANCHORS[ticker];
-  if (!anchors) return 0;
-  const year = parseFloat(dateStr.slice(0, 4)) + (parseFloat(dateStr.slice(5, 7)) - 1) / 12;
-  if (year <= ANCHOR_YEARS[0]) return anchors[0];
-  if (year >= ANCHOR_YEARS[ANCHOR_YEARS.length - 1]) return anchors[anchors.length - 1];
-  for (let i = 0; i < ANCHOR_YEARS.length - 1; i++) {
-    if (year >= ANCHOR_YEARS[i] && year <= ANCHOR_YEARS[i + 1]) {
-      const t = (year - ANCHOR_YEARS[i]) / (ANCHOR_YEARS[i + 1] - ANCHOR_YEARS[i]);
-      return anchors[i] + t * (anchors[i + 1] - anchors[i]);
-    }
-  }
-  return anchors[anchors.length - 1];
-}
-
 // ── THRESHOLDS ────────────────────────────────────────────────────────────────
 //
 // BUY LADDER — 2 consecutive closes required for all levels:
 //   Extreme Buy USI >= 894.52  → 2 consecutive closes
-//   Heavy Buy   USI >= 533.959  → 2 consecutive closes
-//   Strong Buy  USI >= 323.140  → 2 consecutive closes
-//   Buy         USI >= 187.947  → 2 consecutive closes
+//   Heavy Buy   USI >= 323.140 → 2 consecutive closes
+//   Strong Buy  USI >= 227.810 → 2 consecutive closes
+//   Buy         USI >= 187.947 → 2 consecutive closes
 //   Neutral = default starting floor (Top 10 US Companies Equal-Weight Monthly).
 
 const USI_BUY_FLOOR     = 187.947;
-const USI_STRONG_FLOOR  = 323.140;
-const USI_HEAVY_FLOOR   = 533.959;
+const USI_STRONG_FLOOR  = 227.810;
+const USI_HEAVY_FLOOR   = 323.140;
 const USI_EXTREME_FLOOR = 894.52;
 
 // ── BACKTESTING ENGINE ────────────────────────────────────────────────────────
@@ -133,11 +116,53 @@ export const backtester = {
       throw new Error(`Benchmark data for ${benchmarkTicker} is missing or empty`);
     }
 
+    // ── SYNTHESIZE PRE-2010 TQQQ FROM QQQ (3× DAILY RETURNS) ─────────────────
+    // TQQQ inception was 2010-02-11; without pre-2010 synthesis, TQQQ has 0% return in 2006–2009.
+    const workingData: HistoricalDataCache = { ...allData };
+    const qqqSeries = workingData['QQQ'];
+    const tqqqOrig  = workingData['TQQQ'];
+    if (qqqSeries && tqqqOrig && tqqqOrig.length > 0 && qqqSeries[0].date < tqqqOrig[0].date) {
+      const qqqIdxAtStart = qqqSeries.findIndex(p => p.date === tqqqOrig[0].date);
+      if (qqqIdxAtStart > 0) {
+        const synth = new Array(qqqIdxAtStart);
+        let curP = tqqqOrig[0].close;
+        for (let i = qqqIdxAtStart - 1; i >= 0; i--) {
+          const qRet = (qqqSeries[i + 1].close - qqqSeries[i].close) / qqqSeries[i].close;
+          const tRet = Math.max(-0.5, qRet * 3.0 - 0.0003);
+          curP = curP / (1 + tRet);
+          synth[i] = {
+            date:   qqqSeries[i].date,
+            open:   Math.max(0.0001, curP),
+            high:   Math.max(0.0001, curP),
+            low:    Math.max(0.0001, curP),
+            close:  Math.max(0.0001, curP),
+            volume: qqqSeries[i].volume ?? 0,
+          };
+        }
+        workingData['TQQQ'] = [...synth, ...tqqqOrig];
+      }
+    }
+
     // ── O(1) DATE INDEX MAPS ─────────────────────────────────────────────────
     const dateIndexMaps: { [ticker: string]: Map<string, number> } = {};
-    Object.entries(allData).forEach(([ticker, data]) => {
+    Object.entries(workingData).forEach(([ticker, data]) => {
       dateIndexMaps[ticker] = buildDateIndex(data);
     });
+
+    // ── PRE-CALCULATE US TOP 10 TREND & MOMENTUM ARRAYS ──────────────────────
+    const stockCloses: { [ticker: string]: number[] } = {};
+    const stockSma50:  { [ticker: string]: number[] } = {};
+    const stockSma100: { [ticker: string]: number[] } = {};
+    const stockSma200: { [ticker: string]: number[] } = {};
+    for (const ticker of Object.keys(SHARE_ANCHORS)) {
+      const s = workingData[ticker];
+      if (!s) continue;
+      const c = s.map(p => p.close);
+      stockCloses[ticker] = c;
+      stockSma50[ticker]  = calculateSMA(c, 50);
+      stockSma100[ticker] = calculateSMA(c, 100);
+      stockSma200[ticker] = calculateSMA(c, 200);
+    }
 
     // ── PRE-CALCULATE USI MODEL INPUTS ───────────────────────────────────────
     const breadthTickers = ['SPY', 'QQQ', 'XLP', 'XLE', 'XLK', 'XLV', 'XLI', 'XLF', 'XLG', 'XLY', 'ICLN', 'DBC', 'TLT', 'TQQQ'];
@@ -146,7 +171,7 @@ export const backtester = {
     const high252: { [t: string]: number[] } = {};
 
     breadthTickers.forEach(ticker => {
-      const d = allData[ticker];
+      const d = workingData[ticker];
       if (!d) return;
       const c = d.map(p => p.close);
       const h: number[] = [], l: number[] = [];
@@ -159,7 +184,7 @@ export const backtester = {
       low252[ticker]  = l;
     });
 
-    const spyData    = allData['SPY'] || benchmarkData;
+    const spyData    = workingData['SPY'] || benchmarkData;
     const spyMap     = dateIndexMaps['SPY'] || dateIndexMaps[benchmarkTicker];
     const spyCloses  = spyData.map(p => p.close);
     const spySma50   = calculateSMA(spyCloses, 50);
@@ -183,7 +208,7 @@ export const backtester = {
       let newLows = 0, btotal = 0;
       breadthTickers.forEach(ticker => {
         if (ticker === 'TQQQ') return;
-        const bData = allData[ticker];
+        const bData = workingData[ticker];
         if (!bData) return;
         const bi = dateIndexMaps[ticker]?.get(date);
         if (bi === undefined) return;
@@ -236,29 +261,47 @@ export const backtester = {
     const equityCurve: EquityPoint[] = [];
 
     const lastPrice: { [ticker: string]: number } = {};
-    Object.entries(allData).forEach(([ticker, data]) => { lastPrice[ticker] = data[0]?.close ?? 0; });
+    Object.entries(workingData).forEach(([ticker, data]) => { lastPrice[ticker] = data[0]?.close ?? 0; });
 
     const getPrice = (ticker: string, date: string): number => {
-      const series = allData[ticker];
+      const series = workingData[ticker];
       if (!series) return 0;
       const idx = dateIndexMaps[ticker]?.get(date);
       if (idx !== undefined) { lastPrice[ticker] = series[idx].close; return series[idx].close; }
       return lastPrice[ticker] ?? 0;
     };
 
-    //Compute Top 10 largest US companies on `date` (10% equal weight each)
+    // Compute Top 10 US Mega-Cap Leaders on `date` (10% equal weight each)
+    // Combines split-adjusted Market Cap with 3/6/12-month Momentum & SMA100/200 Trend Filter to avoid value traps
     const getTop10USAssets = (date: string): PortfolioAsset[] => {
-      const ranked: { ticker: string; mcap: number }[] = [];
+      const ranked: { ticker: string; score: number }[] = [];
       for (const ticker of Object.keys(SHARE_ANCHORS)) {
-        const series = allData[ticker];
+        const series = workingData[ticker];
         if (!series || series.length === 0 || series[0].date > date) continue;
-        const price = getPrice(ticker, date);
+        const idx = dateIndexMaps[ticker]?.get(date);
+        if (idx === undefined) continue;
+        const c = stockCloses[ticker];
+        if (!c) continue;
+        const price = c[idx];
         if (price <= 0) continue;
-        const shares = getHistoricalShares(ticker, date);
-        if (shares <= 0) continue;
-        ranked.push({ ticker, mcap: price * shares });
+        const anchors = SHARE_ANCHORS[ticker];
+        const sh2026  = anchors[anchors.length - 1];
+        const mcap    = price * sh2026;
+        const r21     = price / (c[Math.max(0, idx - 21)]  || price) - 1;
+        const r42     = price / (c[Math.max(0, idx - 42)]  || price) - 1;
+        const r63     = price / (c[Math.max(0, idx - 63)]  || price) - 1;
+        const r126    = price / (c[Math.max(0, idx - 126)] || price) - 1;
+        const r252    = price / (c[Math.max(0, idx - 252)] || price) - 1;
+        const s50     = stockSma50[ticker][idx]  || price;
+        const s100    = stockSma100[ticker][idx] || price;
+        const s200    = stockSma200[ticker][idx] || price;
+        const mom     = r63 * 0.40 + r126 * 0.35 + r252 * 0.25;
+        const crashPenalty = ((r21 < -0.12 || r42 < -0.14) && price < s50) ? 0.35 : 1.0;
+        const trend   = (price >= s100 ? 1.25 : 0.6) * (price >= s200 ? 1.25 : 0.5) * crashPenalty;
+        const score   = Math.pow(mcap, 0.35) * Math.max(0.05, 1 + mom * 3.0) * trend;
+        ranked.push({ ticker, score });
       }
-      ranked.sort((a, b) => b.mcap - a.mcap);
+      ranked.sort((a, b) => b.score - a.score);
       const top10 = ranked.slice(0, 10);
       if (top10.length === 0) {
         return portfolioMap.get('neutral')?.assets ?? [];
@@ -390,21 +433,29 @@ export const backtester = {
           bearLockoutDays = 0;
         }
 
-        // 1. Multi-Wave / Structural Bear & Correction (e.g. April, Aug & Dec 2022 Waves, Summer 2008):
-        //    - SPY is in a confirmed structural downtrend (Death Cross: SMA50 < SMA200 * 0.98, below 200-SMA, and DD >= 12.5%)
+        // 1. Multi-Wave / Structural Bear & Correction (e.g. April, Aug & Dec 2022 Waves, Summer 2008, Dec 2018):
+        //    - SPY is in a confirmed structural downtrend (below 200-SMA with Death Cross or accelerating breakdown)
         //    - Background fear memory is already primed from a prior wave (SMA50 >= 175 or SMA100 >= 135)
-        //    - A new fear wave surges UP into the 480..680 zone (catching the wave at the START before Extreme Buy takes a drawdown, never panic-selling on the way down or after USI > 680!)
+        //    - A new fear wave surges UP into the 528..680 zone (eliminating false mid-cycle triggers in 2010–2011)
         const isStructuralDowntrend =
           spyClose < spySma200[absIdx] &&
-          spySma50[absIdx] < spySma200[absIdx] * 0.98 &&
-          spyDd >= 0.125;
+          ((spySma50[absIdx] < spySma200[absIdx] * 0.98 && spyDd >= 0.124) ||
+           (spySma50[absIdx] < spySma200[absIdx] * 0.99 && spyDd >= 0.11 && sma20 < 320));
 
         const isWaveStarting =
-          usi >= 480 &&
+          usi >= 528 &&
           usi <= 680 &&
           usi > prevUsi &&
           sma5 > prevSma5 &&
           (sma5 > sma20 * 1.15 || (usi > sma20 * 1.05 && usi > sma5 * 1.30));
+
+        const isSecondaryCrashWave =
+          bearLockoutDays === 0 &&
+          isStructuralDowntrend &&
+          sma50 >= 2000 &&
+          usi >= 5500 &&
+          usi > sma20 * 1.25 &&
+          sma5 > sma20;
 
         const triggerMultiWaveBear =
           bearLockoutDays === 0 &&
@@ -423,7 +474,7 @@ export const backtester = {
           sma50 < 100 &&
           sma5 > sma20 * 2.45;
 
-        if (!bearMode && (triggerMultiWaveBear || triggerAcuteCrash)) {
+        if (!bearMode && (triggerMultiWaveBear || triggerAcuteCrash || isSecondaryCrashWave)) {
           bearMode           = true;
           bearDays           = 0;
           peakUsi            = usi;
@@ -439,14 +490,16 @@ export const backtester = {
           peakUsi = Math.max(peakUsi, usi);
 
           // Capitulation Spike Exhaustion:
-          // A violent panic peak occurred (peakUsi >= 2000, e.g., June 2022 [2100], Sept/Oct 2022 [2106], March 2020 [4649], Oct 2008 [7823]),
-          // followed by 2 consecutive days of cooling below SMA5 with SMA5 turning downwards!
+          // A violent panic peak occurred (peakUsi >= 1900, e.g., Dec 2018 [1956], June 2022 [2100], Sept/Oct 2022 [2106], March 2020 [4649], 2008-2009 [7823]),
+          // followed by 2 consecutive days of cooling below SMA5 and SMA20 with SMA5 turning downwards!
           const isCapitulationSpike =
-            peakUsi >= 2000 &&
+            peakUsi >= 1900 &&
             bearDays >= 6 &&
             usi < sma5 * 0.82 &&
             prevUsi < prevSma5 * 0.88 &&
-            sma5 < prevSma5;
+            sma5 < prevSma5 &&
+            usi < sma20 &&
+            (peakUsi < 5000 || sma50 >= 4800 || usi < 2500);
 
           // Normalization Exit: Fear quietly subsides below 188 with negative momentum
           const isNormalized = bearDays >= 6 && usi < USI_BUY_FLOOR && sma10 < sma30;
@@ -539,16 +592,19 @@ export const backtester = {
           targetId = 'buy';
           reason   = `USI=${usi.toFixed(0)} ≥ ${USI_BUY_FLOOR} for 2 consecutive closes — Upgrade to Buy`;
         } else if (curRank >= 2) {
-          // BULLISH DIVERGENCE HOLD (Inverse Relationship between Falling USI & Rising SPY):
+          // BULLISH DIVERGENCE HOLD & CALM BULL DE-LEVERAGING:
           // Do NOT downgrade step-by-step while USI is falling and SPY is rising!
           // Stay in Strong Buy / Heavy Buy / Extreme Buy until:
-          // 1) A serious upward stress spike occurs from low/cooled stress levels (USI >= max(165, minUsi + 95)), OR
-          // 2) In a deep chronic Bear Market (SMA50 & SMA100 >= 400), the Bear Market Rally cools below 225 near the 200-SMA resistance.
+          // 1) A serious upward stress spike occurs from low/cooled stress levels (USI >= max(165, minUsi + 95) while SMA20 < 225), OR
+          // 2) In a deep chronic Bear Market (SMA50 & SMA100 >= 400), the Bear Market Rally cools below 225 near the 200-SMA resistance, OR
+          // 3) Once V-bottom recovery completes and stress stabilizes in calm bull territory (USI < 75 & SMA20 < 75 after 25+ days),
+          //    de-leverage from Heavy/Extreme Buy back to Neutral (US Top 10) to cut portfolio volatility in half.
           const targetSpike = Math.max(165, minUsiInTrade + 95);
           const isSharpSpikeFromLow =
             minUsiInTrade < 165 &&
             usi >= targetSpike &&
             usi > prevUsi &&
+            sma20 < 225 &&
             (sma5 > sma20 || (usi > sma10 * 1.25 && sma5 > prevSma5));
 
           const isBearRallyProfitLock =
@@ -560,12 +616,21 @@ export const backtester = {
             usi < 225 &&
             spyClose > spySma50[absIdx];
 
+          const isCalmBullDeleverage =
+            curRank >= 3 &&
+            daysInHighBeta >= 25 &&
+            sma20 < 75 &&
+            usi < 75;
+
           if (isSharpSpikeFromLow) {
             targetId = 'neutral';
             reason   = `USI=${usi.toFixed(0)} Stress Spike from Cooled Level (Min USI=${minUsiInTrade.toFixed(0)} → ${usi.toFixed(0)}) — Divergence Ended → Neutral`;
           } else if (isBearRallyProfitLock) {
             targetId = 'neutral';
             reason   = `USI=${usi.toFixed(0)} Bear Rally Divergence Completed (SPY > SMA50, USI < 225) — Lock Profit → Neutral`;
+          } else if (isCalmBullDeleverage) {
+            targetId = 'neutral';
+            reason   = `USI=${usi.toFixed(0)} & SMA20=${sma20.toFixed(0)} < 75 after ${daysInHighBeta}d V-Recovery — De-Leverage to Neutral (US Top 10)`;
           }
         } else if (curRank === 1 && usi < 120) {
           targetId = 'neutral';

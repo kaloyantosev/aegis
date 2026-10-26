@@ -6,7 +6,12 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const TICKERS = ['SPY', 'QQQ', 'TLT', 'GLD', 'BIL', 'XLP', 'XLE', 'XLK', 'DBC', 'XLV', 'XLI', 'XLF', 'XLG', 'XLY', 'ICLN', 'TQQQ'];
+const TICKERS = [
+  'SPY', 'QQQ', 'TLT', 'GLD', 'BIL', 'XLP', 'XLE', 'XLK', 'DBC', 'XLV', 'XLI', 'XLF', 'XLG', 'XLY', 'ICLN', 'TQQQ',
+  'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'BRK-B', 'TSLA', 'LLY', 'AVGO',
+  'JPM', 'WMT', 'XOM', 'V', 'UNH', 'MA', 'PG', 'JNJ', 'HD', 'ORCL',
+  'CVX', 'BAC', 'KO', 'CSCO', 'INTC', 'IBM', 'GE', 'PFE', 'WFC', 'C', 'T'
+];
 const RANGE = '20y'; // 20 years of historical daily data (extending to 2006)
 const OUTPUT_FILE = path.join(__dirname, '..', 'src', 'data', 'historicalData.json');
 

@@ -58,11 +58,21 @@ export const dataService = {
   },
 
   /**
+   * Returns the complete preloaded historical data cache immediately.
+   */
+  getAllCachedData(): { [ticker: string]: TickerData } {
+    return localCache;
+  },
+
+  /**
    * Fetches historical data for a ticker.
-   * Tries live API through dev proxy first, falls back to local JSON cache.
+   * Uses local cache immediately if available, otherwise fetches live API.
    */
   async getHistoricalData(ticker: string): Promise<TickerData> {
     const cleanTicker = ticker.trim().toUpperCase();
+    if (localCache[cleanTicker] && localCache[cleanTicker].length > 0) {
+      return localCache[cleanTicker];
+    }
     const isProduction = import.meta.env.PROD;
 
     try {

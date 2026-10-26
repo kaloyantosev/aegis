@@ -138,7 +138,7 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
     const markers: SeriesMarker<any>[] = [];
     trades.forEach(trade => {
       const lowerName = trade.toPortfolio.name.toLowerCase();
-      const isSell = lowerName.includes('sell');
+      const isSell = lowerName.includes('sell') || lowerName.includes('bear') || lowerName.includes('shield');
       const isBuy = lowerName.includes('buy');
 
       let shape: 'arrowUp' | 'arrowDown' | 'circle' = 'circle';
@@ -289,6 +289,10 @@ export const TradingViewChart: React.FC<TradingViewChartProps> = ({
               <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                 <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#ef4444' }}></span>
                 Rotate to Extreme Buy
+              </span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#f43f5e' }}></span>
+                Bear Shield (BIL/GLD)
               </span>
             </div>
         </div>

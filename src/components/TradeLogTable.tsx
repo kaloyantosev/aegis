@@ -11,9 +11,9 @@ export const TradeLogTable: React.FC<TradeLogTableProps> = ({ trades }) => {
 
   const getPortfolioBadgeClass = (name: string) => {
     const lowerName = name.toLowerCase();
-    if (lowerName.includes('aggressive') || lowerName.includes('stocks') || lowerName.includes('risk-on')) {
+    if (lowerName.includes('buy') || lowerName.includes('aggressive') || lowerName.includes('stocks') || lowerName.includes('risk-on')) {
       return 'badge-success';
-    } else if (lowerName.includes('conservative') || lowerName.includes('defensive') || lowerName.includes('cash') || lowerName.includes('risk-off')) {
+    } else if (lowerName.includes('bear') || lowerName.includes('shield') || lowerName.includes('conservative') || lowerName.includes('defensive') || lowerName.includes('cash') || lowerName.includes('risk-off')) {
       return 'badge-danger';
     }
     return 'badge-warning';

@@ -1,10 +1,10 @@
 export interface PricePoint {
   date: string; // YYYY-MM-DD
   close: number;
-  open: number;
-  high: number;
-  low: number;
-  volume: number;
+  open?: number;
+  high?: number;
+  low?: number;
+  volume?: number;
 }
 
 export type TickerData = PricePoint[];
@@ -42,6 +42,8 @@ export interface BacktestConfig {
   rebalanceFrequency: 'daily' | 'weekly' | 'monthly' | 'none';
   transactionFee: number; // Percentage (e.g., 0.1 for 0.1%)
   benchmarkTicker: string; // e.g. "SPY"
+  useTop10Neutral?: boolean;
+  useBearShield?: boolean;
 }
 
 export interface Trade {
@@ -86,4 +88,6 @@ export interface BacktestResult {
   equityCurve: EquityPoint[];
   trades: Trade[];
   metrics: Metrics;
+  latestTop10?: string[];
+  top10RebalanceCount?: number;
 }

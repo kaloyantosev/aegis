@@ -142,61 +142,79 @@ function computeExtended(results: BacktestResult, initialCapital: number, fullRu
   const totalGain = equityCurve[n - 1].strategyValue - initialCapital;
   const recoveryFactor = metrics.maxDrawdown === 0 ? 0 : (totalGain / (initialCapital * metrics.maxDrawdown / 100));
 
-  // Compute yearly performance from continuous source curve (so all years are always available)
-  const sourceEquity = (fullRunResults && fullRunResults.equityCurve.length > 250) 
-    ? fullRunResults.equityCurve 
-    : equityCurve;
+  // Yearly performance cards: Always use isolated standalone annual simulations ($10,000 fresh Jan 1 start)
+  const isolatedList = (results.isolatedYearlyStats && results.isolatedYearlyStats.length > 0)
+    ? results.isolatedYearlyStats
+    : (fullRunResults?.isolatedYearlyStats && fullRunResults.isolatedYearlyStats.length > 0)
+      ? fullRunResults.isolatedYearlyStats
+      : null;
 
-  const yearsMap: { [year: string]: any[] } = {};
-  sourceEquity.forEach(pt => {
-    const year = new Date(pt.date).getFullYear().toString();
-    if (!yearsMap[year]) yearsMap[year] = [];
-    yearsMap[year].push(pt);
-  });
-
-  const yearlyStats: {
+  let yearlyStats: {
     year: string;
     strategyReturn: number;
     benchmarkReturn: number;
     outperformance: number;
-    standaloneReturn?: number;
-    standaloneBenchReturn?: number;
     isSelected?: boolean;
   }[] = [];
 
-  const sortedYears = Object.keys(yearsMap).sort();
-  for (let i = 0; i < sortedYears.length; i++) {
-    const yr = sortedYears[i];
-    const yrData = yearsMap[yr];
-    
-    let startStrat = yrData[0].strategyValue;
-    let startBench = yrData[0].benchmarkValue;
-    
-    if (i > 0) {
-      const prevYrData = yearsMap[sortedYears[i - 1]];
-      const lastPrevPt = prevYrData[prevYrData.length - 1];
-      startStrat = lastPrevPt.strategyValue;
-      startBench = lastPrevPt.benchmarkValue;
-    }
-
-    const endStrat = yrData[yrData.length - 1].strategyValue;
-    const endBench = yrData[yrData.length - 1].benchmarkValue;
-
-    const strategyReturn = ((endStrat - startStrat) / startStrat) * 100;
-    const benchmarkReturn = ((endBench - startBench) / startBench) * 100;
-    const outperformance = strategyReturn - benchmarkReturn;
-
-    const isSel = selectedYear === Number(yr);
-
-    yearlyStats.push({
-      year: yr,
-      strategyReturn: Math.round(strategyReturn * 100) / 100,
-      benchmarkReturn: Math.round(benchmarkReturn * 100) / 100,
-      outperformance: Math.round(outperformance * 100) / 100,
-      standaloneReturn: isSel ? results.metrics.totalReturnPct : undefined,
-      standaloneBenchReturn: isSel ? results.metrics.benchmarkReturnPct : undefined,
-      isSelected: isSel,
+  if (isolatedList && isolatedList.length > 0) {
+    yearlyStats = isolatedList.map(stat => {
+      const isSel = selectedYear === Number(stat.year);
+      return {
+        year: stat.year,
+        strategyReturn: isSel ? results.metrics.totalReturnPct : stat.strategyReturn,
+        benchmarkReturn: isSel ? results.metrics.benchmarkReturnPct : stat.benchmarkReturn,
+        outperformance: isSel 
+          ? Math.round((results.metrics.totalReturnPct - results.metrics.benchmarkReturnPct) * 100) / 100 
+          : stat.outperformance,
+        isSelected: isSel,
+      };
     });
+  } else {
+    // Fallback if isolatedYearlyStats is not yet populated
+    const sourceEquity = (fullRunResults && fullRunResults.equityCurve.length > 250) 
+      ? fullRunResults.equityCurve 
+      : equityCurve;
+
+    const yearsMap: { [year: string]: any[] } = {};
+    sourceEquity.forEach(pt => {
+      const year = new Date(pt.date).getFullYear().toString();
+      if (!yearsMap[year]) yearsMap[year] = [];
+      yearsMap[year].push(pt);
+    });
+
+    const sortedYears = Object.keys(yearsMap).sort();
+    for (let i = 0; i < sortedYears.length; i++) {
+      const yr = sortedYears[i];
+      const yrData = yearsMap[yr];
+      
+      let startStrat = yrData[0].strategyValue;
+      let startBench = yrData[0].benchmarkValue;
+      
+      if (i > 0) {
+        const prevYrData = yearsMap[sortedYears[i - 1]];
+        const lastPrevPt = prevYrData[prevYrData.length - 1];
+        startStrat = lastPrevPt.strategyValue;
+        startBench = lastPrevPt.benchmarkValue;
+      }
+
+      const endStrat = yrData[yrData.length - 1].strategyValue;
+      const endBench = yrData[yrData.length - 1].benchmarkValue;
+
+      const strategyReturn = ((endStrat - startStrat) / startStrat) * 100;
+      const benchmarkReturn = ((endBench - startBench) / startBench) * 100;
+      const outperformance = strategyReturn - benchmarkReturn;
+
+      const isSel = selectedYear === Number(yr);
+
+      yearlyStats.push({
+        year: yr,
+        strategyReturn: Math.round(strategyReturn * 100) / 100,
+        benchmarkReturn: Math.round(benchmarkReturn * 100) / 100,
+        outperformance: Math.round(outperformance * 100) / 100,
+        isSelected: isSel,
+      });
+    }
   }
 
   return {
@@ -312,7 +330,7 @@ export function AnalyticsPanel({ results, fullRunResults, initialCapital, onSele
           <div>
             <SectionTitle style={{ marginBottom: 0 }}>Year-by-Year Performance</SectionTitle>
             <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-              Continuous Multi-Year Performance · Click any year to run Standalone Simulation
+              Isolated Annual Standalone Returns (Jan 1 Neutral $10k Start) · Click any year to view detailed log & charts
             </span>
           </div>
           {selectedYear && onResetRange && (
@@ -367,10 +385,7 @@ export function AnalyticsPanel({ results, fullRunResults, initialCapital, onSele
               </span>
             </div>
             <div style={{ fontSize: '11px', color: '#94a3b8', lineHeight: 1.4 }}>
-              Showing isolated performance without carried-over holdings from the preceding December.
-              {selectedYear === 2012 ? (
-                <> In the continuous 2006–2026 backtest, 2012 delivered <strong>+21.85%</strong> (SPY +13.47%) because Aegis bought the dip in late 2011 and entered 2012 already holding <em>Strong Buy</em>.</>
-              ) : null}
+              Active standalone annual view for {selectedYear} ($10,000 started on Jan 1 in Neutral). The card values and dashboard metrics match exactly.
             </div>
           </div>
         )}

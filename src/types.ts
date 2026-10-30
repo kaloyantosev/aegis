@@ -84,10 +84,18 @@ export interface Metrics {
   winRate: number; // Percentage of trades that were profitable (or relative to benchmark)
 }
 
+export interface YearlyStat {
+  year: string;
+  strategyReturn: number;
+  benchmarkReturn: number;
+  outperformance: number;
+}
+
 export interface BacktestResult {
   equityCurve: EquityPoint[];
   trades: Trade[];
   metrics: Metrics;
   latestTop10?: string[];
   top10RebalanceCount?: number;
+  isolatedYearlyStats?: YearlyStat[];
 }

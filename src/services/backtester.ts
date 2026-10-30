@@ -7,7 +7,8 @@ import type {
   EquityPoint,
   Metrics,
   HistoricalDataCache,
-  PortfolioAsset
+  PortfolioAsset,
+  YearlyStat
 } from '../types';
 
 // ── HELPERS ───────────────────────────────────────────────────────────────────
@@ -238,38 +239,13 @@ export const backtester = {
     const fullUsiSma50  = calculateSMA(fullUsi, 50);
     const fullUsiSma100 = calculateSMA(fullUsi, 100);
 
-    // ── TRADING DATES ────────────────────────────────────────────────────────
+    // ── BENCHMARK DATA & PORTFOLIO MAP ────────────────────────────────────────
     const benchmarkMap    = dateIndexMaps[benchmarkTicker];
     const benchmarkCloses = benchmarkData.map(p => p.close);
-    const tradingDates    = allDates.filter(d => d >= startDate && d <= endDate);
 
-    if (tradingDates.length === 0) throw new Error(`No trading dates in ${startDate} → ${endDate}`);
-
-    const bmStartIdx   = benchmarkData.findIndex(p => p.date >= startDate);
-    const bmStartPrice = bmStartIdx !== -1 ? benchmarkCloses[bmStartIdx] : benchmarkCloses[0];
-
-    // ── PORTFOLIO MAP ────────────────────────────────────────────────────────
     const portfolioMap = new Map<string, Portfolio>();
     portfolios.forEach(p => portfolioMap.set(p.id, p));
     const resolvedDefault = portfolioMap.has(defaultPortfolioId) ? defaultPortfolioId : 'neutral';
-
-    // ── SIMULATION STATE ─────────────────────────────────────────────────────
-    let activePortfolioId = resolvedDefault;
-    let holdings: { [ticker: string]: number } = {};
-    let cash = initialCapital;
-    const trades: Trade[]            = [];
-    const equityCurve: EquityPoint[] = [];
-
-    const lastPrice: { [ticker: string]: number } = {};
-    Object.entries(workingData).forEach(([ticker, data]) => { lastPrice[ticker] = data[0]?.close ?? 0; });
-
-    const getPrice = (ticker: string, date: string): number => {
-      const series = workingData[ticker];
-      if (!series) return 0;
-      const idx = dateIndexMaps[ticker]?.get(date);
-      if (idx !== undefined) { lastPrice[ticker] = series[idx].close; return series[idx].close; }
-      return lastPrice[ticker] ?? 0;
-    };
 
     // Compute Top 10 US Mega-Cap Leaders on `date` (10% equal weight each)
     // Combines split-adjusted Market Cap with 3/6/12-month Momentum & SMA100/200 Trend Filter to avoid value traps
@@ -308,6 +284,53 @@ export const backtester = {
       const equalWeight = 100 / top10.length;
       return top10.map(item => ({ ticker: item.ticker, weight: equalWeight }));
     };
+
+    // ── SIMULATION PERIOD RUNNER ──────────────────────────────────────────────
+    const simulatePeriod = (simStart: string, simEnd: string, simCapital: number = initialCapital): BacktestResult => {
+      const tradingDates = allDates.filter(d => d >= simStart && d <= simEnd);
+      if (tradingDates.length === 0) {
+        return {
+          equityCurve: [],
+          trades: [],
+          metrics: {
+            totalReturnPct: 0,
+            benchmarkReturnPct: 0,
+            cagr: 0,
+            benchmarkCagr: 0,
+            maxDrawdown: 0,
+            benchmarkMaxDrawdown: 0,
+            sharpeRatio: 0,
+            benchmarkSharpeRatio: 0,
+            totalTrades: 0,
+            totalFees: 0,
+            winRate: 0,
+          },
+          latestTop10: [],
+          top10RebalanceCount: 0,
+        };
+      }
+
+      const bmStartIdx   = benchmarkData.findIndex(p => p.date >= simStart);
+      const bmStartPrice = bmStartIdx !== -1 ? benchmarkCloses[bmStartIdx] : benchmarkCloses[0];
+
+      // ── SIMULATION STATE ─────────────────────────────────────────────────────
+      let activePortfolioId = resolvedDefault;
+      let holdings: { [ticker: string]: number } = {};
+      let cash = simCapital;
+      const trades: Trade[]            = [];
+      const equityCurve: EquityPoint[] = [];
+
+      const lastPrice: { [ticker: string]: number } = {};
+      Object.entries(workingData).forEach(([ticker, data]) => { lastPrice[ticker] = data[0]?.close ?? 0; });
+
+      const getPrice = (ticker: string, date: string): number => {
+        const series = workingData[ticker];
+        if (!series) return 0;
+        const idx = dateIndexMaps[ticker]?.get(date);
+        if (idx !== undefined) { lastPrice[ticker] = series[idx].close; return series[idx].close; }
+        return lastPrice[ticker] ?? 0;
+      };
+
 
     let currentTop10Key = '';
     let latestTop10: string[] = [];
@@ -688,7 +711,7 @@ export const backtester = {
       equityCurve.push({
         date,
         strategyValue:   Math.round(dayValue                                   * 100) / 100,
-        benchmarkValue:  Math.round(initialCapital * (spyPrice / bmStartPrice) * 100) / 100,
+        benchmarkValue:  Math.round(simCapital * (spyPrice / bmStartPrice) * 100) / 100,
         activePortfolioId,
         usiValue:  usi,
         s5fiValue: fullUsiSma5[absIdx] ?? 0,
@@ -707,12 +730,12 @@ export const backtester = {
     const firstPt = equityCurve[0];
     const years   = Math.max(0.01, (new Date(lastPt.date).getTime() - new Date(firstPt.date).getTime()) / (365.25 * 86400000));
 
-    const totalRet  = ((lastPt.strategyValue  - initialCapital) / initialCapital) * 100;
-    const benchRet  = ((lastPt.benchmarkValue - initialCapital) / initialCapital) * 100;
-    const cagr      = (Math.pow(lastPt.strategyValue  / initialCapital, 1 / years) - 1) * 100;
-    const benchCagr = (Math.pow(lastPt.benchmarkValue / initialCapital, 1 / years) - 1) * 100;
+    const totalRet  = ((lastPt.strategyValue  - simCapital) / simCapital) * 100;
+    const benchRet  = ((lastPt.benchmarkValue - simCapital) / simCapital) * 100;
+    const cagr      = (Math.pow(lastPt.strategyValue  / simCapital, 1 / years) - 1) * 100;
+    const benchCagr = (Math.pow(lastPt.benchmarkValue / simCapital, 1 / years) - 1) * 100;
 
-    let stratPeak = initialCapital, benchPeak = initialCapital, maxDD = 0, benchMaxDD = 0;
+    let stratPeak = simCapital, benchPeak = simCapital, maxDD = 0, benchMaxDD = 0;
     const stratRets: number[] = [], benchRets: number[] = [];
 
     equityCurve.forEach((pt, i) => {
@@ -758,6 +781,40 @@ export const backtester = {
       winRate:      Math.round((trades.length > 0 ? wins / trades.length * 100 : 0) * 100) / 100,
     };
 
-    return { equityCurve, trades, metrics, latestTop10, top10RebalanceCount };
+
+      return { equityCurve, trades, metrics, latestTop10, top10RebalanceCount };
+    };
+
+    // Run primary requested period
+    const mainSim = simulatePeriod(startDate, endDate, initialCapital);
+
+    // Compute isolated yearly performance for all calendar years in the dataset
+    // (each year starting on Jan 1 with fresh $10,000 in Neutral)
+    const distinctYears = Array.from(new Set(allDates.map(d => d.slice(0, 4)))).sort();
+    const isolatedYearlyStats: YearlyStat[] = distinctYears.map(yr => {
+      const yrDates = allDates.filter(d => d.startsWith(yr));
+      if (yrDates.length === 0) return null;
+      const yrStart = yrDates[0];
+      const yrEnd   = yrDates[yrDates.length - 1];
+
+      let yrRes: BacktestResult;
+      if (startDate === yrStart && endDate === yrEnd) {
+        yrRes = mainSim;
+      } else {
+        yrRes = simulatePeriod(yrStart, yrEnd, 10000);
+      }
+
+      return {
+        year: yr,
+        strategyReturn: yrRes.metrics.totalReturnPct,
+        benchmarkReturn: yrRes.metrics.benchmarkReturnPct,
+        outperformance: Math.round((yrRes.metrics.totalReturnPct - yrRes.metrics.benchmarkReturnPct) * 100) / 100,
+      };
+    }).filter(Boolean) as YearlyStat[];
+
+    return {
+      ...mainSim,
+      isolatedYearlyStats,
+    };
   }
 };

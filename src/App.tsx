@@ -136,6 +136,7 @@ export default function App() {
   const [loading, setLoading]                 = useState(true);
   const [error, setError]                     = useState<string | null>(null);
   const [results, setResults]                 = useState<BacktestResult | null>(null);
+  const [fullRunResults, setFullRunResults]   = useState<BacktestResult | null>(null);
   const [cache, setCache]                     = useState<HistoricalDataCache>({});
   const [showDoc, setShowDoc]                 = useState(false);
 
@@ -179,7 +180,11 @@ export default function App() {
             }
           : p
       );
-      setResults(backtester.run(dynamicConfig, portfoliosWithNeutralLabel, RULES, 'neutral', freshCache));
+      const res = backtester.run(dynamicConfig, portfoliosWithNeutralLabel, RULES, 'neutral', freshCache);
+      setResults(res);
+      if (start === '2006-01-03' && end === latestDateAvailable) {
+        setFullRunResults(res);
+      }
     } catch (e: any) {
       setError(e.message ?? 'Simulation error');
     } finally {
@@ -428,7 +433,14 @@ export default function App() {
             />
 
             {/* Full analytics dashboard */}
-            <AnalyticsPanel results={results} initialCapital={CONFIG.initialCapital} onSelectYear={handleSelectYear} onResetRange={handleResetRange} />
+            <AnalyticsPanel
+              results={results}
+              fullRunResults={fullRunResults || (startDate === '2006-01-03' ? results : null)}
+              initialCapital={CONFIG.initialCapital}
+              onSelectYear={handleSelectYear}
+              onResetRange={handleResetRange}
+              selectedYear={startDate.slice(0, 4) === endDate.slice(0, 4) ? Number(startDate.slice(0, 4)) : null}
+            />
 
             {/* Trade log */}
             <div className="glass-panel" style={{ padding: '16px' }}>

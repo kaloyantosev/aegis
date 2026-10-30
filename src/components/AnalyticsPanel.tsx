@@ -3,13 +3,15 @@ import type { BacktestResult } from '../types';
 
 interface Props {
   results: BacktestResult;
+  fullRunResults?: BacktestResult | null;
   initialCapital: number;
   onSelectYear?: (year: number) => void;
   onResetRange?: () => void;
+  selectedYear?: number | null;
 }
 
 // ── EXTENDED STATISTICS ───────────────────────────────────────────────────────
-function computeExtended(results: BacktestResult, initialCapital: number) {
+function computeExtended(results: BacktestResult, initialCapital: number, fullRunResults?: BacktestResult | null, selectedYear?: number | null) {
   const { equityCurve, trades, metrics } = results;
   const n = equityCurve.length;
   if (n === 0) return null;
@@ -140,9 +142,13 @@ function computeExtended(results: BacktestResult, initialCapital: number) {
   const totalGain = equityCurve[n - 1].strategyValue - initialCapital;
   const recoveryFactor = metrics.maxDrawdown === 0 ? 0 : (totalGain / (initialCapital * metrics.maxDrawdown / 100));
 
-  // Compute yearly performance
+  // Compute yearly performance from continuous source curve (so all years are always available)
+  const sourceEquity = (fullRunResults && fullRunResults.equityCurve.length > 250) 
+    ? fullRunResults.equityCurve 
+    : equityCurve;
+
   const yearsMap: { [year: string]: any[] } = {};
-  equityCurve.forEach(pt => {
+  sourceEquity.forEach(pt => {
     const year = new Date(pt.date).getFullYear().toString();
     if (!yearsMap[year]) yearsMap[year] = [];
     yearsMap[year].push(pt);
@@ -153,6 +159,9 @@ function computeExtended(results: BacktestResult, initialCapital: number) {
     strategyReturn: number;
     benchmarkReturn: number;
     outperformance: number;
+    standaloneReturn?: number;
+    standaloneBenchReturn?: number;
+    isSelected?: boolean;
   }[] = [];
 
   const sortedYears = Object.keys(yearsMap).sort();
@@ -177,11 +186,16 @@ function computeExtended(results: BacktestResult, initialCapital: number) {
     const benchmarkReturn = ((endBench - startBench) / startBench) * 100;
     const outperformance = strategyReturn - benchmarkReturn;
 
+    const isSel = selectedYear === Number(yr);
+
     yearlyStats.push({
       year: yr,
       strategyReturn: Math.round(strategyReturn * 100) / 100,
       benchmarkReturn: Math.round(benchmarkReturn * 100) / 100,
       outperformance: Math.round(outperformance * 100) / 100,
+      standaloneReturn: isSel ? results.metrics.totalReturnPct : undefined,
+      standaloneBenchReturn: isSel ? results.metrics.benchmarkReturnPct : undefined,
+      isSelected: isSel,
     });
   }
 
@@ -269,9 +283,9 @@ function SectionTitle({ children, style }: { children: React.ReactNode; style?: 
 }
 
 // ── MAIN PANEL ────────────────────────────────────────────────────────────────
-export function AnalyticsPanel({ results, initialCapital, onSelectYear, onResetRange }: Props) {
+export function AnalyticsPanel({ results, fullRunResults, initialCapital, onSelectYear, onResetRange, selectedYear }: Props) {
   const { metrics } = results;
-  const ext = computeExtended(results, initialCapital);
+  const ext = computeExtended(results, initialCapital, fullRunResults, selectedYear);
   if (!ext) return null;
 
   const finalVal = results.equityCurve[results.equityCurve.length - 1]?.strategyValue ?? initialCapital;
@@ -294,31 +308,73 @@ export function AnalyticsPanel({ results, initialCapital, onSelectYear, onResetR
 
       {/* ── YEARLY STATISTICS CARDS ────────────────────────────────────── */}
       <div>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-          <SectionTitle style={{ marginBottom: 0 }}>Year-by-Year Performance</SectionTitle>
-          {startYear === endYear && onResetRange && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px', flexWrap: 'wrap', gap: '8px' }}>
+          <div>
+            <SectionTitle style={{ marginBottom: 0 }}>Year-by-Year Performance</SectionTitle>
+            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+              Continuous Multi-Year Performance · Click any year to run Standalone Simulation
+            </span>
+          </div>
+          {selectedYear && onResetRange && (
             <button
               onClick={onResetRange}
               style={{
-                background: 'rgba(255,255,255,0.06)',
-                border: '1px solid var(--border-soft)',
-                color: 'var(--primary)',
-                borderRadius: '4px',
-                padding: '3px 10px',
-                fontSize: '9px',
+                background: 'rgba(99, 102, 241, 0.15)',
+                border: '1px solid rgba(99, 102, 241, 0.4)',
+                color: '#818cf8',
+                borderRadius: '6px',
+                padding: '4px 12px',
+                fontSize: '10px',
                 fontWeight: 700,
                 cursor: 'pointer',
                 transition: 'background-color 0.2s',
                 textTransform: 'uppercase',
                 letterSpacing: '0.05em'
               }}
-              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.12)'}
-              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.06)'}
+              onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(99, 102, 241, 0.25)'}
+              onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(99, 102, 241, 0.15)'}
             >
-              ← Reset to All Years
+              ← Back to All Years
             </button>
           )}
         </div>
+
+        {selectedYear && (
+          <div style={{
+            background: 'rgba(99, 102, 241, 0.08)',
+            border: '1px solid rgba(99, 102, 241, 0.3)',
+            borderRadius: '8px',
+            padding: '10px 14px',
+            marginBottom: '10px',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span style={{
+                fontSize: '10px',
+                fontWeight: 800,
+                padding: '2px 6px',
+                borderRadius: '4px',
+                background: '#6366f1',
+                color: '#ffffff',
+                letterSpacing: '0.05em'
+              }}>
+                STANDALONE SIMULATION: {selectedYear}
+              </span>
+              <span style={{ fontSize: '11px', fontWeight: 700, color: '#e2e8f0' }}>
+                Fresh Jan 1 Start ($10,000 Initial Capital in Neutral)
+              </span>
+            </div>
+            <div style={{ fontSize: '11px', color: '#94a3b8', lineHeight: 1.4 }}>
+              Showing isolated performance without carried-over holdings from the preceding December.
+              {selectedYear === 2012 ? (
+                <> In the continuous 2006–2026 backtest, 2012 delivered <strong>+21.85%</strong> (SPY +13.47%) because Aegis bought the dip in late 2011 and entered 2012 already holding <em>Strong Buy</em>.</>
+              ) : null}
+            </div>
+          </div>
+        )}
+
         <div style={{
           display: 'flex',
           gap: '8px',
@@ -332,11 +388,12 @@ export function AnalyticsPanel({ results, initialCapital, onSelectYear, onResetR
               <div
                 key={stat.year}
                 onClick={() => onSelectYear?.(Number(stat.year))}
-                title={`Click to simulate year ${stat.year}`}
+                title={`Click to simulate standalone year ${stat.year}`}
                 style={{
                   flex: '0 0 auto',
-                  background: 'rgba(255,255,255,0.02)',
-                  border: '1px solid var(--border-soft)',
+                  background: stat.isSelected ? 'rgba(99, 102, 241, 0.12)' : 'rgba(255,255,255,0.02)',
+                  border: stat.isSelected ? '2px solid #818cf8' : '1px solid var(--border-soft)',
+                  boxShadow: stat.isSelected ? '0 0 12px rgba(99, 102, 241, 0.35)' : 'none',
                   borderRadius: 8,
                   padding: '8px 12px',
                   minWidth: '95px',
@@ -348,25 +405,38 @@ export function AnalyticsPanel({ results, initialCapital, onSelectYear, onResetR
                   transition: 'transform 0.15s, border-color 0.15s, background-color 0.15s',
                 }}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--primary)';
-                  e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.04)';
-                  e.currentTarget.style.transform = 'translateY(-2px)';
+                  if (!stat.isSelected) {
+                    e.currentTarget.style.borderColor = 'var(--primary)';
+                    e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.04)';
+                    e.currentTarget.style.transform = 'translateY(-2px)';
+                  }
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'var(--border-soft)';
-                  e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.02)';
-                  e.currentTarget.style.transform = 'none';
+                  if (!stat.isSelected) {
+                    e.currentTarget.style.borderColor = 'var(--border-soft)';
+                    e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.02)';
+                    e.currentTarget.style.transform = 'none';
+                  }
                 }}
               >
                 <div style={{
                   fontSize: '12px',
                   fontWeight: 800,
-                  color: 'var(--text-primary)',
+                  color: stat.isSelected ? '#818cf8' : 'var(--text-primary)',
                   borderBottom: '1px solid var(--border-soft)',
                   paddingBottom: 4,
                   marginBottom: 2,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 2
                 }}>
-                  {stat.year}
+                  <span>{stat.year}</span>
+                  {stat.isSelected && (
+                    <span style={{ fontSize: '7px', fontWeight: 800, color: '#a5b4fc', letterSpacing: '0.04em' }}>
+                      ● ACTIVE
+                    </span>
+                  )}
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                   <span style={{ fontSize: '8px', color: 'var(--text-muted)', fontWeight: 600 }}>AEGIS</span>

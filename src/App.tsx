@@ -4,7 +4,7 @@ import { backtester } from './services/backtester';
 import { TradingViewChart } from './components/TradingViewChart';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { TradeLogTable } from './components/TradeLogTable';
-import { ArrowRightLeft, AlertCircle, ShieldAlert, Layers } from 'lucide-react';
+import { ArrowRightLeft, AlertCircle, ShieldAlert, Layers, RefreshCw } from 'lucide-react';
 import type { HistoricalDataCache, BacktestResult, Portfolio } from './types';
 
 // ── CONFIG & PORTFOLIO SCHEMAS ────────────────────────────────────────────────
@@ -125,15 +125,15 @@ const RULES = [
 
 // ── APP ────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const cachedTickers = dataService.getAllCachedData();
-  const latestDateAvailable = cachedTickers[CONFIG.benchmarkTicker]?.[cachedTickers[CONFIG.benchmarkTicker]?.length - 1]?.date || '2026-10-26';
-
+  const [latestDate, setLatestDate]           = useState(() => dataService.getLatestAvailableDate(CONFIG.benchmarkTicker));
   const [startDate, setStartDate]             = useState('2006-01-03');
-  const [endDate, setEndDate]                 = useState(latestDateAvailable);
+  const [endDate, setEndDate]                 = useState(() => dataService.getLatestAvailableDate(CONFIG.benchmarkTicker));
   const [useTop10Neutral, setUseTop10Neutral] = useState(true);
   const [useBearShield, setUseBearShield]     = useState(true);
   const [useAggroDips, setUseAggroDips]       = useState(true);
   const [loading, setLoading]                 = useState(true);
+  const [syncing, setSyncing]                 = useState(false);
+  const [syncStatus, setSyncStatus]           = useState<string | null>(null);
   const [error, setError]                     = useState<string | null>(null);
   const [results, setResults]                 = useState<BacktestResult | null>(null);
   const [fullRunResults, setFullRunResults]   = useState<BacktestResult | null>(null);
@@ -160,7 +160,7 @@ export default function App() {
         ...activePortfolios.flatMap(p => p.assets.map(a => a.ticker)),
       ]);
       for (const ticker of tickers) {
-        if (!freshCache[ticker]) {
+        if (!freshCache[ticker] || freshCache[ticker].length === 0) {
           freshCache[ticker] = await dataService.getHistoricalData(ticker);
         }
       }
@@ -182,7 +182,7 @@ export default function App() {
       );
       const res = backtester.run(dynamicConfig, portfoliosWithNeutralLabel, RULES, 'neutral', freshCache);
       setResults(res);
-      if (start === '2006-01-03' && end === latestDateAvailable) {
+      if (start === '2006-01-03' && end === latestDate) {
         setFullRunResults(res);
       }
     } catch (e: any) {
@@ -192,9 +192,33 @@ export default function App() {
     }
   };
 
+  const handleSyncData = async (manual = false) => {
+    if (syncing) return;
+    setSyncing(true);
+    setSyncStatus('Fetching recent market data...');
+    try {
+      const { updatedCount, latestDate: newLatest } = await dataService.syncLatestData();
+      setLatestDate(newLatest);
+      const shouldUpdateEnd = endDate >= latestDate || manual;
+      const targetEnd = shouldUpdateEnd ? newLatest : endDate;
+      if (shouldUpdateEnd) {
+        setEndDate(newLatest);
+      }
+      setSyncStatus(updatedCount > 0 ? `Synced +${updatedCount} bars (${newLatest})` : `Up to date (${newLatest})`);
+      await runBacktest(startDate, targetEnd, useTop10Neutral, useBearShield, useAggroDips);
+      setTimeout(() => setSyncStatus(null), 4000);
+    } catch (e: any) {
+      setSyncStatus(`Sync: ${e.message}`);
+      setTimeout(() => setSyncStatus(null), 5000);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const handleSelectYear = (year: number) => {
     const start = `${year}-01-01`;
-    const end = year === 2026 ? latestDateAvailable : `${year}-12-31`;
+    const currentYear = new Date().getFullYear();
+    const end = year >= currentYear ? latestDate : `${year}-12-31`;
     setStartDate(start);
     setEndDate(end);
     runBacktest(start, end, useTop10Neutral, useBearShield, useAggroDips);
@@ -202,7 +226,7 @@ export default function App() {
 
   const handleResetRange = () => {
     const start = '2006-01-03';
-    const end = latestDateAvailable;
+    const end = latestDate;
     setStartDate(start);
     setEndDate(end);
     runBacktest(start, end, useTop10Neutral, useBearShield, useAggroDips);
@@ -223,7 +247,15 @@ export default function App() {
     runBacktest(startDate, endDate, useTop10Neutral, useBearShield, nextVal);
   };
 
-  useEffect(() => { runBacktest(); }, []);
+  useEffect(() => {
+    const init = async () => {
+      await runBacktest();
+      if (!dataService.isDataRecent()) {
+        handleSyncData(false);
+      }
+    };
+    init();
+  }, []);
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -232,6 +264,7 @@ export default function App() {
       <header className="glass-panel" style={{
         margin: '16px 16px 8px 16px', padding: '16px 32px', borderRadius: '16px',
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        flexWrap: 'wrap', gap: '16px',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{
@@ -251,20 +284,63 @@ export default function App() {
           </div>
         </div>
 
-        <button
-          onClick={() => setShowDoc(true)}
-          className="btn"
-          style={{
-            padding: '8px 20px', fontSize: '12px', borderRadius: '8px',
-            cursor: 'pointer', background: 'rgba(255,255,255,0.06)',
-            border: '1px solid var(--border-soft)', color: 'var(--text-primary)',
-            transition: 'background-color 0.2s',
-          }}
-          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.12)'}
-          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.06)'}
-        >
-          Documentation
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+          {/* Data Freshness Indicator & Update Button */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '8px',
+            background: 'rgba(255,255,255,0.04)', padding: '6px 12px',
+            borderRadius: '8px', border: '1px solid var(--border-soft)',
+            fontSize: '12px',
+          }}>
+            <span style={{
+              width: '8px', height: '8px', borderRadius: '50%',
+              background: syncing ? '#fbbf24' : '#10b981',
+              boxShadow: syncing ? '0 0 8px #fbbf24' : '0 0 8px #10b981',
+              display: 'inline-block'
+            }} />
+            <span style={{ color: 'var(--text-secondary)' }}>
+              Data: <strong style={{ color: 'var(--text-primary)' }}>{latestDate}</strong>
+            </span>
+            <button
+              onClick={() => handleSyncData(true)}
+              disabled={syncing}
+              title="Sync latest market data via Vercel Market Data API"
+              style={{
+                display: 'flex', alignItems: 'center', gap: '5px',
+                background: syncing ? 'rgba(99, 102, 241, 0.25)' : 'rgba(255, 255, 255, 0.08)',
+                border: '1px solid var(--border-soft)',
+                color: 'var(--text-primary)',
+                padding: '4px 10px', borderRadius: '6px',
+                cursor: syncing ? 'wait' : 'pointer',
+                fontSize: '11px', fontWeight: 600,
+                transition: 'all 0.2s',
+              }}
+            >
+              <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
+              {syncing ? 'Updating...' : 'Update Data'}
+            </button>
+            {syncStatus && (
+              <span style={{ fontSize: '11px', color: '#818cf8', fontWeight: 500, marginLeft: '4px' }}>
+                {syncStatus}
+              </span>
+            )}
+          </div>
+
+          <button
+            onClick={() => setShowDoc(true)}
+            className="btn"
+            style={{
+              padding: '8px 20px', fontSize: '12px', borderRadius: '8px',
+              cursor: 'pointer', background: 'rgba(255,255,255,0.06)',
+              border: '1px solid var(--border-soft)', color: 'var(--text-primary)',
+              transition: 'background-color 0.2s',
+            }}
+            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.12)'}
+            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.06)'}
+          >
+            Documentation
+          </button>
+        </div>
       </header>
 
       {/* Date & Strategy Controls Toolbar */}

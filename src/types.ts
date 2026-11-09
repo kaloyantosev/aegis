@@ -35,7 +35,7 @@ export interface MethodologyOptions {
   usiNoise: boolean; // original deterministic sin/cos noise added to USI (default false)
   pointInTimeShares: boolean; // interpolate share counts over time instead of using 2026 counts (default true)
   syntheticTqqq: boolean; // back-fill TQQQ before 2010 from 3x QQQ (default false)
-  startDate?: string; // override the first trading day (default: first full year with real data for every holding)
+  startDate?: string; // first trading day (default 2006-01-03)
 }
 
 export interface Trade {
@@ -46,6 +46,7 @@ export interface Trade {
   usi: number;
   reason: string;
   cost: number;
+  substitutions: string[]; // e.g. ["TQQQ→QQQ"] when a fund did not exist yet
 }
 
 export interface EquityPoint {
@@ -54,32 +55,8 @@ export interface EquityPoint {
   benchmark: number;
   portfolioId: string;
   usi: number;
-}
-
-export interface RatioSet {
-  cagr: number; // %
-  volatility: number; // % annualised
-  sharpe: number; // vs T-bills (BIL)
-  maxDrawdown: number; // % (positive number)
-}
-
-export interface Metrics {
-  strategy: RatioSet;
-  benchmark: RatioSet;
-  years: number;
-  rotationsPerYear: number;
-  feesPct: number; // total fees as % of starting capital
-}
-
-export interface YearlyStat {
-  year: string;
-  partial: boolean; // true for the current, incomplete year
-  strategyReturn: number;
-  benchmarkReturn: number;
-  excess: number;
-  strategyMaxDD: number;
-  benchmarkMaxDD: number;
-  defensiveDays: number; // % of trading days in Bear Shield
+  rf: number; // T-bill (BIL) total return for this day; 0 before BIL existed
+  proxy: boolean; // holdings include a stand-in for a fund that did not exist yet
 }
 
 export interface BacktestResult {
@@ -87,9 +64,28 @@ export interface BacktestResult {
   endDate: string;
   equityCurve: EquityPoint[];
   trades: Trade[];
-  metrics: Metrics;
-  yearly: YearlyStat[];
   currentPortfolioId: string;
   currentHoldings: PortfolioAsset[];
-  timeInRegime: { [portfolioId: string]: number }; // % of days
+  top10Updates: number;
+}
+
+export interface RatioSet {
+  totalReturn: number; // %
+  cagr: number; // %
+  volatility: number; // % annualised
+  sharpe: number; // vs T-bills
+  maxDrawdown: number; // % (positive)
+  finalValue: number; // $ from $10,000
+}
+
+export interface PeriodStats {
+  from: string;
+  to: string;
+  years: number;
+  strategy: RatioSet;
+  benchmark: RatioSet;
+  rotations: number;
+  fees: number; // $
+  proxyDays: number; // days holding a stand-in fund
+  defensiveDays: number; // % of days in Bear Shield
 }

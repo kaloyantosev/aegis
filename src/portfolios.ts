@@ -30,3 +30,7 @@ export const CLASSIC: Portfolio[] = [
 export const REGIME_NAMES: Record<string, string> = {
   'bear-shield': 'Bear Shield', neutral: 'Neutral', buy: 'Buy', 'strong-buy': 'Strong Buy', 'heavy-buy': 'Heavy Buy', 'extreme-buy': 'Extreme Buy',
 };
+
+export const REGIME_COLORS: Record<string, string> = {
+  'bear-shield': '#e11d48', neutral: '#64748b', buy: '#84cc16', 'strong-buy': '#22c55e', 'heavy-buy': '#059669', 'extreme-buy': '#7c3aed',
+};

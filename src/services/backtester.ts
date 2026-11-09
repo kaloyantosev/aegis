@@ -4,12 +4,9 @@ import type {
   EquityPoint,
   HistoricalDataCache,
   MethodologyOptions,
-  Metrics,
   Portfolio,
   PortfolioAsset,
-  RatioSet,
   Trade,
-  YearlyStat,
 } from '../types';
 
 // ── Methodology ───────────────────────────────────────────────────────────────
@@ -18,11 +15,15 @@ import type {
 // tested, so results are not flattered:
 //   1. Total-return prices (dividends included) for every asset and the benchmark.
 //   2. Signals are computed on day t's close and executed at day t+1's close.
-//   3. No simulated prices: the test starts at the first full calendar year in which
-//      every asset the strategy can hold has real trading history (TQQQ: Feb 2010).
+//   3. No simulated prices. Before a fund existed, a real instrument stands in and the
+//      day is flagged: TQQQ → QQQ (unleveraged, before Feb 2010), BIL → cash (before
+//      May 2007), anything else → its weight spread over the rest of the portfolio.
 //   4. No noise term in the USI.
 //   5. Share counts are interpolated through time instead of using 2026 counts.
-//   6. One continuous run; yearly figures are cut from that single equity curve.
+//   6. One continuous run from 2006 (indicators warmed up on 2005 data); any year or
+//      date range is a slice of that single equity curve.
+
+const STAND_INS: Record<string, string> = { TQQQ: 'QQQ', BIL: '$CASH' };
 
 export const DEFAULT_METHOD: MethodologyOptions = {
   executionLagDays: 1,
@@ -156,16 +157,33 @@ export const backtester = {
       dateIndex[t] = m;
     }
 
-    // ── Start date: first full calendar year with real data for every possible holding
-    const heldTickers = new Set(portfolios.flatMap(p => p.assets.map(a => a.ticker)));
-    const latestInception = [...heldTickers].reduce((mx, t) => {
-      const d = workingData[t]?.[0]?.date;
-      if (!d) throw new Error(`No data for ${t}`);
-      return d > mx ? d : mx;
-    }, '0000');
     const allDates = benchmarkData.map(p => p.date);
-    const firstFullYear = String(Number(latestInception.slice(0, 4)) + (latestInception.slice(5) === '01-01' ? 0 : 1));
-    const startDate = method.startDate ?? allDates.find(d => d >= `${firstFullYear}-01-01`)!;
+    const startDate = allDates.find(d => d >= (method.startDate ?? '2006-01-01'))!;
+    for (const t of new Set(portfolios.flatMap(p => p.assets.map(a => a.ticker)))) {
+      if (!workingData[t]?.length) throw new Error(`No data for ${t}`);
+    }
+
+    /** Replace funds that had not started trading on `date` with real stand-ins. */
+    const resolveAssets = (assets: PortfolioAsset[], date: string) => {
+      const live = (t: string) => t === '$CASH' || (workingData[t]?.[0]?.date ?? '9999') <= date;
+      const out: { [t: string]: number } = {};
+      const subs: string[] = [];
+      let orphan = 0;
+      for (const a of assets) {
+        if (live(a.ticker)) { out[a.ticker] = (out[a.ticker] ?? 0) + a.weight; continue; }
+        const alt = STAND_INS[a.ticker];
+        if (alt && live(alt)) {
+          out[alt] = (out[alt] ?? 0) + a.weight;
+          subs.push(`${a.ticker}→${alt === '$CASH' ? 'cash' : alt}`);
+        } else {
+          orphan += a.weight;
+          subs.push(`${a.ticker}→spread`);
+        }
+      }
+      const liveTotal = Object.values(out).reduce((s, w) => s + w, 0);
+      if (orphan > 0 && liveTotal > 0) for (const t of Object.keys(out)) out[t] += orphan * (out[t] / liveTotal);
+      return { assets: Object.entries(out).map(([ticker, weight]) => ({ ticker, weight })), subs };
+    };
 
     // ── Top-10 inputs
     const stockCloses: { [t: string]: number[] } = {};
@@ -271,11 +289,19 @@ export const backtester = {
       return lastPrice[t] ?? 0;
     };
 
+    const bilIdx = dateIndex['BIL'];
+    const rfDaily = (date: string, prevDate: string): number => {
+      const a = bilIdx?.get(prevDate), b = bilIdx?.get(date);
+      if (a === undefined || b === undefined) return 0;
+      return workingData['BIL'][b].close / workingData['BIL'][a].close - 1;
+    };
+
     let holdings: { [t: string]: number } = {};
     let cash = initialCapital;
     let heldId = '';
     let heldAssets: PortfolioAsset[] = [];
-    let totalFees = 0;
+    let heldSubs: string[] = [];
+    let top10Updates = 0;
     const trades: Trade[] = [];
     const equityCurve: EquityPoint[] = [];
 
@@ -283,29 +309,35 @@ export const backtester = {
     const queue: { execIdx: number; order: Order }[] = [];
 
     const execute = (o: Order, date: string) => {
+      const { assets, subs } = resolveAssets(o.assets, date);
       let value = cash;
       for (const [t, sh] of Object.entries(holdings)) value += sh * priceOn(t, date);
-      const cur: { [t: string]: number } = {};
+      const cur: { [t: string]: number } = { $CASH: value > 0 ? cash / value : 0 };
       for (const [t, sh] of Object.entries(holdings)) cur[t] = value > 0 ? (sh * priceOn(t, date)) / value : 0;
       const tgt: { [t: string]: number } = {};
-      o.assets.forEach(a => { tgt[a.ticker] = (tgt[a.ticker] ?? 0) + a.weight / 100; });
+      assets.forEach(a => { tgt[a.ticker] = (tgt[a.ticker] ?? 0) + a.weight / 100; });
       let turnover = 0;
-      new Set([...Object.keys(cur), ...Object.keys(tgt)]).forEach(t => { turnover += Math.abs((tgt[t] ?? 0) - (cur[t] ?? 0)); });
+      new Set([...Object.keys(cur), ...Object.keys(tgt)]).forEach(t => {
+        if (t !== '$CASH') turnover += Math.abs((tgt[t] ?? 0) - (cur[t] ?? 0));
+      });
       const cost = (turnover / 2) * value * (transactionFee / 100);
       const investable = value - cost;
       const next: { [t: string]: number } = {};
-      o.assets.forEach(a => {
-        const p = priceOn(a.ticker, date);
-        if (p > 0) next[a.ticker] = (next[a.ticker] ?? 0) + (investable * a.weight / 100) / p;
+      let nextCash = 0;
+      assets.forEach(a => {
+        const amount = (investable * a.weight) / 100;
+        const p = a.ticker === '$CASH' ? 0 : priceOn(a.ticker, date);
+        if (p > 0) next[a.ticker] = (next[a.ticker] ?? 0) + amount / p;
+        else nextCash += amount;
       });
       if (o.rotation) {
-        trades.push({ signalDate: o.signalDate, date, fromPortfolio: heldId || null, toPortfolio: o.toId, usi: o.usi, reason: o.reason, cost });
+        trades.push({ signalDate: o.signalDate, date, fromPortfolio: heldId || null, toPortfolio: o.toId, usi: o.usi, reason: o.reason, cost, substitutions: subs });
       }
-      totalFees += cost;
       holdings = next;
-      cash = 0;
+      cash = nextCash;
       heldId = o.toId;
       heldAssets = o.assets;
+      heldSubs = subs;
     };
 
     // Signal-side state (what the model has decided to hold)
@@ -470,6 +502,7 @@ export const backtester = {
         const key = top.map(a => a.ticker).sort().join(',');
         if (key !== currentTop10Key) {
           currentTop10Key = key;
+          top10Updates++;
           order({ toId: 'neutral', assets: top, reason: 'Monthly Top-10 update', rotation: false });
         }
       }
@@ -478,93 +511,18 @@ export const backtester = {
       let value = cash;
       for (const [t, sh] of Object.entries(holdings)) value += sh * priceOn(t, date);
       const bm = initialCapital * (priceOn(benchmarkTicker, date) / benchmarkBase);
-      equityCurve.push({ date, strategy: value, benchmark: bm, portfolioId: heldId, usi });
+      const prev = dayIdx > 0 ? tradingDates[dayIdx - 1] : null;
+      equityCurve.push({ date, strategy: value, benchmark: bm, portfolioId: heldId, usi, rf: prev ? rfDaily(date, prev) : 0, proxy: heldSubs.length > 0 });
     }
-
-    // ── Metrics
-    const rfDaily = (date: string, prevDate: string): number => {
-      const a = dateIndex['BIL']?.get(prevDate), b = dateIndex['BIL']?.get(date);
-      if (a === undefined || b === undefined) return 0;
-      return workingData['BIL'][b].close / workingData['BIL'][a].close - 1;
-    };
-
-    const ratios = (key: 'strategy' | 'benchmark'): RatioSet => {
-      const first = equityCurve[0], last = equityCurve[equityCurve.length - 1];
-      const yrs = (Date.parse(last.date) - Date.parse(first.date)) / (365.25 * 86400000);
-      const rets: number[] = [], excess: number[] = [];
-      let peak = first[key], mdd = 0;
-      for (let i = 1; i < equityCurve.length; i++) {
-        const r = equityCurve[i][key] / equityCurve[i - 1][key] - 1;
-        rets.push(r);
-        excess.push(r - rfDaily(equityCurve[i].date, equityCurve[i - 1].date));
-        peak = Math.max(peak, equityCurve[i][key]);
-        mdd = Math.max(mdd, 1 - equityCurve[i][key] / peak);
-      }
-      const mean = (x: number[]) => x.reduce((a, b) => a + b, 0) / x.length;
-      const sd = (x: number[]) => { const m = mean(x); return Math.sqrt(x.reduce((a, v) => a + (v - m) ** 2, 0) / (x.length - 1)); };
-      return {
-        cagr: (Math.pow(last[key] / first[key], 1 / yrs) - 1) * 100,
-        volatility: sd(rets) * Math.sqrt(252) * 100,
-        sharpe: (mean(excess) / sd(excess)) * Math.sqrt(252),
-        maxDrawdown: mdd * 100,
-      };
-    };
-
-    const years = (Date.parse(equityCurve[equityCurve.length - 1].date) - Date.parse(equityCurve[0].date)) / (365.25 * 86400000);
-    const metrics: Metrics = {
-      strategy: ratios('strategy'),
-      benchmark: ratios('benchmark'),
-      years,
-      rotationsPerYear: trades.length / years,
-      feesPct: (totalFees / initialCapital) * 100,
-    };
-
-    // ── Calendar years cut from the one continuous run
-    const yearly: YearlyStat[] = [];
-    const lastDate = equityCurve[equityCurve.length - 1].date;
-    const lastYearComplete = lastDate.slice(5) >= '12-28';
-    let prevEnd: EquityPoint | null = null;
-    const byYear = new Map<string, EquityPoint[]>();
-    equityCurve.forEach(p => {
-      const y = p.date.slice(0, 4);
-      if (!byYear.has(y)) byYear.set(y, []);
-      byYear.get(y)!.push(p);
-    });
-    for (const [year, pts] of byYear) {
-      const base: EquityPoint = prevEnd ?? pts[0];
-      const dd = (key: 'strategy' | 'benchmark') => {
-        let peak = base[key], m = 0;
-        for (const p of pts) { peak = Math.max(peak, p[key]); m = Math.max(m, 1 - p[key] / peak); }
-        return m * 100;
-      };
-      const end = pts[pts.length - 1];
-      const s = (end.strategy / base.strategy - 1) * 100, b = (end.benchmark / base.benchmark - 1) * 100;
-      yearly.push({
-        year,
-        partial: year === lastDate.slice(0, 4) && !lastYearComplete,
-        strategyReturn: s,
-        benchmarkReturn: b,
-        excess: s - b,
-        strategyMaxDD: dd('strategy'),
-        benchmarkMaxDD: dd('benchmark'),
-        defensiveDays: (pts.filter(p => p.portfolioId === 'bear-shield').length / pts.length) * 100,
-      });
-      prevEnd = end;
-    }
-
-    const timeInRegime: { [id: string]: number } = {};
-    equityCurve.forEach(p => { timeInRegime[p.portfolioId] = (timeInRegime[p.portfolioId] ?? 0) + 100 / equityCurve.length; });
 
     return {
       startDate,
-      endDate: lastDate,
+      endDate: tradingDates[tradingDates.length - 1],
       equityCurve,
       trades,
-      metrics,
-      yearly,
       currentPortfolioId: intendedId,
       currentHoldings: queue.length ? queue[queue.length - 1].order.assets : heldAssets,
-      timeInRegime,
+      top10Updates,
     };
   },
 };

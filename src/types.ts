@@ -1,10 +1,6 @@
 export interface PricePoint {
   date: string; // YYYY-MM-DD
-  close: number;
-  open?: number;
-  high?: number;
-  low?: number;
-  volume?: number;
+  close: number; // total-return (dividend + split adjusted) close
 }
 
 export type TickerData = PricePoint[];
@@ -15,7 +11,7 @@ export interface HistoricalDataCache {
 
 export interface PortfolioAsset {
   ticker: string;
-  weight: number; // Percentage value (0-100)
+  weight: number; // percent, 0-100
 }
 
 export interface Portfolio {
@@ -25,77 +21,75 @@ export interface Portfolio {
   assets: PortfolioAsset[];
 }
 
-export type RuleIndicator = 'SMA' | 'EMA' | 'Price' | 'Momentum';
-
-export interface Rule {
-  id: string;
-  indicator: RuleIndicator;
-  period: number; // period in days (e.g., 200 for 200 SMA, 60 for 3-month momentum)
-  operator: 'above' | 'below';
-  targetPortfolioId: string;
+export interface BacktestConfig {
+  initialCapital: number;
+  transactionFee: number; // percent per unit of turnover, e.g. 0.1
+  benchmarkTicker: string; // e.g. "SPY"
+  useTop10Neutral: boolean;
+  useBearShield: boolean;
 }
 
-export interface BacktestConfig {
-  startDate: string; // YYYY-MM-DD
-  endDate: string; // YYYY-MM-DD
-  initialCapital: number;
-  rebalanceFrequency: 'daily' | 'weekly' | 'monthly' | 'none';
-  transactionFee: number; // Percentage (e.g., 0.1 for 0.1%)
-  benchmarkTicker: string; // e.g. "SPY"
-  useTop10Neutral?: boolean;
-  useBearShield?: boolean;
+/** Switches used only to measure what each methodology fix changes. The app always uses the defaults. */
+export interface MethodologyOptions {
+  executionLagDays: number; // 1 = trade at the next close after the signal (default)
+  usiNoise: boolean; // original deterministic sin/cos noise added to USI (default false)
+  pointInTimeShares: boolean; // interpolate share counts over time instead of using 2026 counts (default true)
+  syntheticTqqq: boolean; // back-fill TQQQ before 2010 from 3x QQQ (default false)
+  startDate?: string; // override the first trading day (default: first full year with real data for every holding)
 }
 
 export interface Trade {
-  date: string;
-  type: 'rotate';
-  fromPortfolio: { id: string; name: string } | null;
-  toPortfolio: { id: string; name: string };
-  capitalBefore: number;
-  capitalAfter: number;
-  transactionCost: number;
-  spyPrice: number;
-  spyIndicatorValue: number; // Value of the indicator that triggered the change
-  reason: string; // Text description of the trigger e.g., "SPY (420.5) went above SMA 200 (415.2)"
-  returnPct?: number;
+  signalDate: string;
+  date: string; // execution date
+  fromPortfolio: string | null;
+  toPortfolio: string;
+  usi: number;
+  reason: string;
+  cost: number;
 }
 
 export interface EquityPoint {
   date: string;
-  strategyValue: number;
-  benchmarkValue: number;
-  activePortfolioId: string;
-  usiValue: number;
-  s5fiValue: number;
-  ushValue: number;
+  strategy: number;
+  benchmark: number;
+  portfolioId: string;
+  usi: number;
+}
+
+export interface RatioSet {
+  cagr: number; // %
+  volatility: number; // % annualised
+  sharpe: number; // vs T-bills (BIL)
+  maxDrawdown: number; // % (positive number)
 }
 
 export interface Metrics {
-  totalReturnPct: number;
-  benchmarkReturnPct: number;
-  cagr: number;
-  benchmarkCagr: number;
-  maxDrawdown: number;
-  benchmarkMaxDrawdown: number;
-  sharpeRatio: number;
-  benchmarkSharpeRatio: number;
-  totalTrades: number;
-  totalFees: number;
-  winRate: number; // Percentage of trades that were profitable (or relative to benchmark)
+  strategy: RatioSet;
+  benchmark: RatioSet;
+  years: number;
+  rotationsPerYear: number;
+  feesPct: number; // total fees as % of starting capital
 }
 
 export interface YearlyStat {
   year: string;
+  partial: boolean; // true for the current, incomplete year
   strategyReturn: number;
   benchmarkReturn: number;
-  outperformance: number;
+  excess: number;
+  strategyMaxDD: number;
+  benchmarkMaxDD: number;
+  defensiveDays: number; // % of trading days in Bear Shield
 }
 
 export interface BacktestResult {
+  startDate: string;
+  endDate: string;
   equityCurve: EquityPoint[];
   trades: Trade[];
   metrics: Metrics;
-  latestTop10?: string[];
-  top10RebalanceCount?: number;
-  isolatedYearlyStats?: YearlyStat[];
+  yearly: YearlyStat[];
+  currentPortfolioId: string;
+  currentHoldings: PortfolioAsset[];
+  timeInRegime: { [portfolioId: string]: number }; // % of days
 }

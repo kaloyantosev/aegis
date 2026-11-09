@@ -1,17 +1,35 @@
 import type {
-  Portfolio,
-  Rule,
   BacktestConfig,
   BacktestResult,
-  Trade,
   EquityPoint,
-  Metrics,
   HistoricalDataCache,
+  MethodologyOptions,
+  Metrics,
+  Portfolio,
   PortfolioAsset,
-  YearlyStat
+  RatioSet,
+  Trade,
+  YearlyStat,
 } from '../types';
 
-// ── HELPERS ───────────────────────────────────────────────────────────────────
+// ── Methodology ───────────────────────────────────────────────────────────────
+// Strategy rules (the USI stress index, tier thresholds, Bear Shield logic and the
+// Top-10 selection) are unchanged from the original model. What changed is how it is
+// tested, so results are not flattered:
+//   1. Total-return prices (dividends included) for every asset and the benchmark.
+//   2. Signals are computed on day t's close and executed at day t+1's close.
+//   3. No simulated prices: the test starts at the first full calendar year in which
+//      every asset the strategy can hold has real trading history (TQQQ: Feb 2010).
+//   4. No noise term in the USI.
+//   5. Share counts are interpolated through time instead of using 2026 counts.
+//   6. One continuous run; yearly figures are cut from that single equity curve.
+
+export const DEFAULT_METHOD: MethodologyOptions = {
+  executionLagDays: 1,
+  usiNoise: false,
+  pointInTimeShares: true,
+  syntheticTqqq: false,
+};
 
 export function calculateSMA(prices: number[], period: number): number[] {
   const sma: number[] = [];
@@ -24,25 +42,26 @@ export function calculateSMA(prices: number[], period: number): number[] {
   return sma;
 }
 
-export function calculateEMA(prices: number[], period: number): number[] {
-  const ema: number[] = [];
-  const k = 2 / (period + 1);
-  let prev = prices[0];
-  for (let i = 0; i < prices.length; i++) {
-    prev = i === 0 ? prices[0] : prices[i] * k + prev * (1 - k);
-    ema.push(prev);
+function rollingExtremes(c: number[], window: number) {
+  const hi: number[] = new Array(c.length);
+  const lo: number[] = new Array(c.length);
+  for (let i = 0; i < c.length; i++) {
+    let h = -Infinity, l = Infinity;
+    for (let j = Math.max(0, i - window + 1); j <= i; j++) {
+      if (c[j] > h) h = c[j];
+      if (c[j] < l) l = c[j];
+    }
+    hi[i] = h;
+    lo[i] = l;
   }
-  return ema;
+  return { hi, lo };
 }
 
-function buildDateIndex(series: { date: string }[]): Map<string, number> {
-  const map = new Map<string, number>();
-  for (let i = 0; i < series.length; i++) map.set(series[i].date, i);
-  return map;
-}
-
-// ── US TOP 10 MARKET CAP & MOMENTUM ENGINE (2006–2026) ───────────────────────
-// Split-adjusted shares outstanding (in billions) for US mega-cap universe
+// ── US mega-cap universe for the Top-10 Neutral portfolio ─────────────────────
+// Split-adjusted shares outstanding (billions), approximate, at ANCHOR_YEARS.
+// Note: the universe is today's large caps, so the Top-10 sleeve has survivorship bias
+// (2006-era leaders that later collapsed, e.g. AIG, are not in the list).
+const ANCHOR_YEARS = [2006, 2009, 2012, 2015, 2018, 2022, 2026];
 const SHARE_ANCHORS: { [ticker: string]: number[] } = {
   'AAPL':  [24.5, 25.0, 25.8, 24.5, 20.0, 16.3, 15.1],
   'MSFT':  [10.2,  9.3,  8.8,  8.3,  7.7,  7.5,  7.43],
@@ -77,744 +96,475 @@ const SHARE_ANCHORS: { [ticker: string]: number[] } = {
   'T':     [ 3.9,  6.0,  5.9,  5.2,  7.2,  7.15, 7.15],
 };
 
-// ── THRESHOLDS ────────────────────────────────────────────────────────────────
-//
-// BUY LADDER — 2 consecutive closes required for all levels:
-//   Extreme Buy USI >= 894.52  → 2 consecutive closes
-//   Heavy Buy   USI >= 323.140 → 2 consecutive closes
-//   Strong Buy  USI >= 227.810 → 2 consecutive closes
-//   Buy         USI >= 187.947 → 2 consecutive closes
-//   Neutral = default starting floor (Top 10 US Companies Equal-Weight Monthly).
+function sharesAt(ticker: string, date: string, pointInTime: boolean): number {
+  const a = SHARE_ANCHORS[ticker];
+  if (!pointInTime) return a[a.length - 1];
+  const t = Number(date.slice(0, 4)) + (Number(date.slice(5, 7)) - 1) / 12;
+  if (t <= ANCHOR_YEARS[0]) return a[0] || a.find(v => v > 0) || 0;
+  for (let k = 1; k < ANCHOR_YEARS.length; k++) {
+    if (t <= ANCHOR_YEARS[k]) {
+      const lo = a[k - 1] || a[k], hi = a[k];
+      const w = (t - ANCHOR_YEARS[k - 1]) / (ANCHOR_YEARS[k] - ANCHOR_YEARS[k - 1]);
+      return lo + (hi - lo) * w;
+    }
+  }
+  return a[a.length - 1];
+}
 
+// ── Thresholds (unchanged) ────────────────────────────────────────────────────
 const USI_BUY_FLOOR     = 187.947;
 const USI_STRONG_FLOOR  = 227.810;
 const USI_HEAVY_FLOOR   = 323.140;
 const USI_EXTREME_FLOOR = 894.52;
 
-// ── BACKTESTING ENGINE ────────────────────────────────────────────────────────
+const TIER_RANK: { [id: string]: number } = {
+  'bear-shield': -1, 'neutral': 0, 'buy': 1, 'strong-buy': 2, 'heavy-buy': 3, 'extreme-buy': 4,
+};
 
 export const backtester = {
   run(
     config: BacktestConfig,
     portfolios: Portfolio[],
-    _rules: Rule[],
-    defaultPortfolioId: string,
-    allData: HistoricalDataCache
+    allData: HistoricalDataCache,
+    method: MethodologyOptions = DEFAULT_METHOD,
   ): BacktestResult {
-    const {
-      startDate,
-      endDate,
-      initialCapital,
-      rebalanceFrequency,
-      transactionFee,
-      benchmarkTicker,
-      useTop10Neutral = true,
-      useBearShield = true,
-    } = config;
-
+    const { initialCapital, transactionFee, benchmarkTicker, useTop10Neutral, useBearShield } = config;
     const benchmarkData = allData[benchmarkTicker];
-    if (!benchmarkData || benchmarkData.length === 0) {
-      throw new Error(`Benchmark data for ${benchmarkTicker} is missing or empty`);
-    }
+    if (!benchmarkData?.length) throw new Error(`Benchmark data for ${benchmarkTicker} is missing`);
 
-    // ── SYNTHESIZE PRE-2010 TQQQ FROM QQQ (3× DAILY RETURNS) ─────────────────
-    // TQQQ inception was 2010-02-11; without pre-2010 synthesis, TQQQ has 0% return in 2006–2009.
     const workingData: HistoricalDataCache = { ...allData };
-    const qqqSeries = workingData['QQQ'];
-    const tqqqOrig  = workingData['TQQQ'];
-    if (qqqSeries && tqqqOrig && tqqqOrig.length > 0 && qqqSeries[0].date < tqqqOrig[0].date) {
-      const qqqIdxAtStart = qqqSeries.findIndex(p => p.date === tqqqOrig[0].date);
-      if (qqqIdxAtStart > 0) {
-        const synth = new Array(qqqIdxAtStart);
-        let curP = tqqqOrig[0].close;
-        for (let i = qqqIdxAtStart - 1; i >= 0; i--) {
-          const qRet = (qqqSeries[i + 1].close - qqqSeries[i].close) / qqqSeries[i].close;
-          const tRet = Math.max(-0.5, qRet * 3.0 - 0.0003);
-          curP = curP / (1 + tRet);
-          synth[i] = {
-            date:   qqqSeries[i].date,
-            open:   Math.max(0.0001, curP),
-            high:   Math.max(0.0001, curP),
-            low:    Math.max(0.0001, curP),
-            close:  Math.max(0.0001, curP),
-            volume: qqqSeries[i].volume ?? 0,
-          };
+    if (method.syntheticTqqq) {
+      // Only for measuring the effect of the original back-fill. Never used by the app.
+      const q = workingData['QQQ'], tq = workingData['TQQQ'];
+      const k0 = q.findIndex(p => p.date === tq[0].date);
+      if (k0 > 0) {
+        const synth = new Array(k0);
+        let cur = tq[0].close;
+        for (let i = k0 - 1; i >= 0; i--) {
+          const r = (q[i + 1].close - q[i].close) / q[i].close;
+          cur = cur / (1 + Math.max(-0.5, r * 3 - 0.0003));
+          synth[i] = { date: q[i].date, close: Math.max(0.0001, cur) };
         }
-        workingData['TQQQ'] = [...synth, ...tqqqOrig];
+        workingData['TQQQ'] = [...synth, ...tq];
       }
     }
 
-    // ── O(1) DATE INDEX MAPS ─────────────────────────────────────────────────
-    const dateIndexMaps: { [ticker: string]: Map<string, number> } = {};
-    Object.entries(workingData).forEach(([ticker, data]) => {
-      dateIndexMaps[ticker] = buildDateIndex(data);
-    });
+    const dateIndex: { [t: string]: Map<string, number> } = {};
+    for (const [t, s] of Object.entries(workingData)) {
+      const m = new Map<string, number>();
+      s.forEach((p, i) => m.set(p.date, i));
+      dateIndex[t] = m;
+    }
 
-    // ── PRE-CALCULATE US TOP 10 TREND & MOMENTUM ARRAYS ──────────────────────
-    const stockCloses: { [ticker: string]: number[] } = {};
-    const stockSma50:  { [ticker: string]: number[] } = {};
-    const stockSma100: { [ticker: string]: number[] } = {};
-    const stockSma200: { [ticker: string]: number[] } = {};
-    for (const ticker of Object.keys(SHARE_ANCHORS)) {
-      const s = workingData[ticker];
+    // ── Start date: first full calendar year with real data for every possible holding
+    const heldTickers = new Set(portfolios.flatMap(p => p.assets.map(a => a.ticker)));
+    const latestInception = [...heldTickers].reduce((mx, t) => {
+      const d = workingData[t]?.[0]?.date;
+      if (!d) throw new Error(`No data for ${t}`);
+      return d > mx ? d : mx;
+    }, '0000');
+    const allDates = benchmarkData.map(p => p.date);
+    const firstFullYear = String(Number(latestInception.slice(0, 4)) + (latestInception.slice(5) === '01-01' ? 0 : 1));
+    const startDate = method.startDate ?? allDates.find(d => d >= `${firstFullYear}-01-01`)!;
+
+    // ── Top-10 inputs
+    const stockCloses: { [t: string]: number[] } = {};
+    const sma50: { [t: string]: number[] } = {}, sma100: { [t: string]: number[] } = {}, sma200: { [t: string]: number[] } = {};
+    for (const t of Object.keys(SHARE_ANCHORS)) {
+      const s = workingData[t];
       if (!s) continue;
       const c = s.map(p => p.close);
-      stockCloses[ticker] = c;
-      stockSma50[ticker]  = calculateSMA(c, 50);
-      stockSma100[ticker] = calculateSMA(c, 100);
-      stockSma200[ticker] = calculateSMA(c, 200);
+      stockCloses[t] = c;
+      sma50[t] = calculateSMA(c, 50);
+      sma100[t] = calculateSMA(c, 100);
+      sma200[t] = calculateSMA(c, 200);
     }
 
-    // ── PRE-CALCULATE USI MODEL INPUTS ───────────────────────────────────────
-    const breadthTickers = ['SPY', 'QQQ', 'XLP', 'XLE', 'XLK', 'XLV', 'XLI', 'XLF', 'XLG', 'XLY', 'ICLN', 'DBC', 'TLT', 'TQQQ'];
-
-    const low252:  { [t: string]: number[] } = {};
-    const high252: { [t: string]: number[] } = {};
-
-    breadthTickers.forEach(ticker => {
-      const d = workingData[ticker];
+    // ── USI inputs
+    const breadthTickers = ['SPY', 'QQQ', 'XLP', 'XLE', 'XLK', 'XLV', 'XLI', 'XLF', 'XLG', 'XLY', 'ICLN', 'DBC', 'TLT'];
+    const low252: { [t: string]: number[] } = {}, high252: { [t: string]: number[] } = {};
+    breadthTickers.forEach(t => {
+      const d = workingData[t];
       if (!d) return;
-      const c = d.map(p => p.close);
-      const h: number[] = [], l: number[] = [];
-      for (let i = 0; i < c.length; i++) {
-        const slice = c.slice(Math.max(0, i - 251), i + 1);
-        h.push(Math.max(...slice));
-        l.push(Math.min(...slice));
-      }
-      high252[ticker] = h;
-      low252[ticker]  = l;
+      const { hi, lo } = rollingExtremes(d.map(p => p.close), 252);
+      high252[t] = hi;
+      low252[t] = lo;
     });
 
-    const spyData    = workingData['SPY'] || benchmarkData;
-    const spyMap     = dateIndexMaps['SPY'] || dateIndexMaps[benchmarkTicker];
-    const spyCloses  = spyData.map(p => p.close);
-    const spySma50   = calculateSMA(spyCloses, 50);
-    const spySma200  = calculateSMA(spyCloses, 200);
-    const spyHigh252 = high252['SPY'] || [];
+    const spyData = workingData['SPY'];
+    const spyMap = dateIndex['SPY'];
+    const spyCloses = spyData.map(p => p.close);
+    const spySma50 = calculateSMA(spyCloses, 50);
+    const spySma200 = calculateSMA(spyCloses, 200);
+    const spyHigh252 = high252['SPY'];
 
-    // ── USI MODEL ────────────────────────────────────────────────────────────
     const computeUSI = (date: string): number => {
       const i = spyMap.get(date);
       if (i === undefined || i < 10) return 12;
-
-      const close    = spyCloses[i];
-      const h252     = spyHigh252[i] || close;
+      const close = spyCloses[i];
+      const h252 = spyHigh252[i] || close;
       const drawdown = Math.max(0, (h252 - close) / h252);
-      const prev10   = spyCloses[Math.max(0, i - 10)];
-      const roc10    = (close - prev10) / prev10;
-
-      const belowSma50  = close < spySma50[i]  ? 1 : 0;
+      const prev10 = spyCloses[Math.max(0, i - 10)];
+      const roc10 = (close - prev10) / prev10;
+      const belowSma50 = close < spySma50[i] ? 1 : 0;
       const belowSma200 = close < spySma200[i] ? 1 : 0;
 
       let newLows = 0, btotal = 0;
-      breadthTickers.forEach(ticker => {
-        if (ticker === 'TQQQ') return;
-        const bData = workingData[ticker];
-        if (!bData) return;
-        const bi = dateIndexMaps[ticker]?.get(date);
+      breadthTickers.forEach(t => {
+        const bi = dateIndex[t]?.get(date);
         if (bi === undefined) return;
         btotal++;
-        if (bData[bi].close <= (low252[ticker]?.[bi] ?? bData[bi].close) * 1.02) newLows++;
+        if (workingData[t][bi].close <= (low252[t]?.[bi] ?? workingData[t][bi].close) * 1.02) newLows++;
       });
       const breadthLowRatio = btotal > 0 ? newLows / btotal : 0;
 
       let usi = 12;
       if (drawdown > 0.005) usi += Math.pow(drawdown * 10, 2.5) * 80;
-      if (roc10 < -0.01)   usi += Math.pow(Math.abs(roc10) * 15, 2.2) * 60;
+      if (roc10 < -0.01) usi += Math.pow(Math.abs(roc10) * 15, 2.2) * 60;
       usi += breadthLowRatio * 600;
-      if (belowSma200)     usi *= 1.6;
+      if (belowSma200) usi *= 1.6;
       else if (belowSma50) usi *= 1.25;
-
-      const noise = Math.abs(Math.sin(i * 0.37) * 3 + Math.cos(i * 0.09) * 2);
-      return Math.max(3, Math.round((usi + noise) * 100) / 100);
+      if (method.usiNoise) usi += Math.abs(Math.sin(i * 0.37) * 3 + Math.cos(i * 0.09) * 2);
+      return Math.max(3, Math.round(usi * 100) / 100);
     };
 
-    // ── PRE-COMPUTE FULL USI & USI MOVING AVERAGES FOR BEAR DETECTION ────────
-    const allDates = benchmarkData.map(p => p.date);
-    const fullUsi  = allDates.map(d => computeUSI(d));
-    const fullUsiSma5   = calculateSMA(fullUsi, 5);
-    const fullUsiSma10  = calculateSMA(fullUsi, 10);
-    const fullUsiSma20  = calculateSMA(fullUsi, 20);
-    const fullUsiSma30  = calculateSMA(fullUsi, 30);
-    const fullUsiSma50  = calculateSMA(fullUsi, 50);
-    const fullUsiSma100 = calculateSMA(fullUsi, 100);
+    const fullUsi = allDates.map(computeUSI);
+    const uSma5 = calculateSMA(fullUsi, 5), uSma10 = calculateSMA(fullUsi, 10), uSma20 = calculateSMA(fullUsi, 20);
+    const uSma30 = calculateSMA(fullUsi, 30), uSma50 = calculateSMA(fullUsi, 50), uSma100 = calculateSMA(fullUsi, 100);
 
-    // ── BENCHMARK DATA & PORTFOLIO MAP ────────────────────────────────────────
-    const benchmarkMap    = dateIndexMaps[benchmarkTicker];
-    const benchmarkCloses = benchmarkData.map(p => p.close);
+    const portfolioMap = new Map(portfolios.map(p => [p.id, p]));
 
-    const portfolioMap = new Map<string, Portfolio>();
-    portfolios.forEach(p => portfolioMap.set(p.id, p));
-    const resolvedDefault = portfolioMap.has(defaultPortfolioId) ? defaultPortfolioId : 'neutral';
-
-    // Compute Top 10 US Mega-Cap Leaders on `date` (10% equal weight each)
-    // Combines split-adjusted Market Cap with 3/6/12-month Momentum & SMA100/200 Trend Filter to avoid value traps
-    const getTop10USAssets = (date: string): PortfolioAsset[] => {
+    const getTop10 = (date: string): PortfolioAsset[] => {
       const ranked: { ticker: string; score: number }[] = [];
-      for (const ticker of Object.keys(SHARE_ANCHORS)) {
-        const series = workingData[ticker];
-        if (!series || series.length === 0 || series[0].date > date) continue;
-        const idx = dateIndexMaps[ticker]?.get(date);
-        if (idx === undefined) continue;
-        const c = stockCloses[ticker];
-        if (!c) continue;
+      for (const t of Object.keys(SHARE_ANCHORS)) {
+        const idx = dateIndex[t]?.get(date);
+        const c = stockCloses[t];
+        if (idx === undefined || !c) continue;
         const price = c[idx];
-        if (price <= 0) continue;
-        const anchors = SHARE_ANCHORS[ticker];
-        const sh2026  = anchors[anchors.length - 1];
-        const mcap    = price * sh2026;
-        const r21     = price / (c[Math.max(0, idx - 21)]  || price) - 1;
-        const r63     = price / (c[Math.max(0, idx - 63)]  || price) - 1;
-        const r126    = price / (c[Math.max(0, idx - 126)] || price) - 1;
-        const r252    = price / (c[Math.max(0, idx - 252)] || price) - 1;
-        const s50     = stockSma50[ticker][idx]  || price;
-        const s100    = stockSma100[ticker][idx] || price;
-        const s200    = stockSma200[ticker][idx] || price;
-        const mom     = r63 * 0.40 + r126 * 0.35 + r252 * 0.25;
+        const shares = sharesAt(t, date, method.pointInTimeShares);
+        if (price <= 0 || shares <= 0) continue;
+        const mcap = price * shares;
+        const r21 = price / (c[Math.max(0, idx - 21)] || price) - 1;
+        const r63 = price / (c[Math.max(0, idx - 63)] || price) - 1;
+        const r126 = price / (c[Math.max(0, idx - 126)] || price) - 1;
+        const r252 = price / (c[Math.max(0, idx - 252)] || price) - 1;
+        const s50 = sma50[t][idx] || price, s100 = sma100[t][idx] || price, s200 = sma200[t][idx] || price;
+        const mom = r63 * 0.40 + r126 * 0.35 + r252 * 0.25;
         const crashPenalty = (r21 < -0.14 && price < s50) ? 0.4 : 1.0;
-        const trend   = (price >= s100 ? 1.25 : 0.6) * (price >= s200 ? 1.25 : 0.5) * crashPenalty;
-        const score   = Math.pow(mcap, 0.35) * Math.max(0.05, 1 + mom * 3.0) * trend;
-        ranked.push({ ticker, score });
+        const trend = (price >= s100 ? 1.25 : 0.6) * (price >= s200 ? 1.25 : 0.5) * crashPenalty;
+        ranked.push({ ticker: t, score: Math.pow(mcap, 0.35) * Math.max(0.05, 1 + mom * 3.0) * trend });
       }
       ranked.sort((a, b) => b.score - a.score);
-      const top10 = ranked.slice(0, 10);
-      if (top10.length === 0) {
-        return portfolioMap.get('neutral')?.assets ?? [];
-      }
-      const equalWeight = 100 / top10.length;
-      return top10.map(item => ({ ticker: item.ticker, weight: equalWeight }));
+      const top = ranked.slice(0, 10);
+      if (!top.length) return portfolioMap.get('neutral')?.assets ?? [];
+      return top.map(x => ({ ticker: x.ticker, weight: 100 / top.length }));
     };
 
-    // ── SIMULATION PERIOD RUNNER ──────────────────────────────────────────────
-    const simulatePeriod = (simStart: string, simEnd: string, simCapital: number = initialCapital): BacktestResult => {
-      const tradingDates = allDates.filter(d => d >= simStart && d <= simEnd);
-      if (tradingDates.length === 0) {
-        return {
-          equityCurve: [],
-          trades: [],
-          metrics: {
-            totalReturnPct: 0,
-            benchmarkReturnPct: 0,
-            cagr: 0,
-            benchmarkCagr: 0,
-            maxDrawdown: 0,
-            benchmarkMaxDrawdown: 0,
-            sharpeRatio: 0,
-            benchmarkSharpeRatio: 0,
-            totalTrades: 0,
-            totalFees: 0,
-            winRate: 0,
-          },
-          latestTop10: [],
-          top10RebalanceCount: 0,
-        };
-      }
+    // ── Simulation state
+    const tradingDates = allDates.filter(d => d >= startDate);
+    if (!tradingDates.length) throw new Error(`No trading days after ${startDate}`);
+    const benchmarkBase = benchmarkData[dateIndex[benchmarkTicker].get(tradingDates[0])!].close;
+    const lastPrice: { [t: string]: number } = {};
+    const priceOn = (t: string, date: string): number => {
+      const i = dateIndex[t]?.get(date);
+      if (i !== undefined) lastPrice[t] = workingData[t][i].close;
+      return lastPrice[t] ?? 0;
+    };
 
-      const bmStartIdx   = benchmarkData.findIndex(p => p.date >= simStart);
-      const bmStartPrice = bmStartIdx !== -1 ? benchmarkCloses[bmStartIdx] : benchmarkCloses[0];
+    let holdings: { [t: string]: number } = {};
+    let cash = initialCapital;
+    let heldId = '';
+    let heldAssets: PortfolioAsset[] = [];
+    let totalFees = 0;
+    const trades: Trade[] = [];
+    const equityCurve: EquityPoint[] = [];
 
-      // ── SIMULATION STATE ─────────────────────────────────────────────────────
-      let activePortfolioId = resolvedDefault;
-      let holdings: { [ticker: string]: number } = {};
-      let cash = simCapital;
-      const trades: Trade[]            = [];
-      const equityCurve: EquityPoint[] = [];
+    type Order = { toId: string; assets: PortfolioAsset[]; reason: string; rotation: boolean; signalDate: string; usi: number };
+    const queue: { execIdx: number; order: Order }[] = [];
 
-      const lastPrice: { [ticker: string]: number } = {};
-      Object.entries(workingData).forEach(([ticker, data]) => { lastPrice[ticker] = data[0]?.close ?? 0; });
-
-      const getPrice = (ticker: string, date: string): number => {
-        const series = workingData[ticker];
-        if (!series) return 0;
-        const idx = dateIndexMaps[ticker]?.get(date);
-        if (idx !== undefined) { lastPrice[ticker] = series[idx].close; return series[idx].close; }
-        return lastPrice[ticker] ?? 0;
-      };
-
-
-    let currentTop10Key = '';
-    let latestTop10: string[] = [];
-    let top10RebalanceCount = 0;
-
-    // ── ALLOCATION ───────────────────────────────────────────────────────────
-    const allocate = (
-      toId: string,
-      date: string,
-      reason: string,
-      isRotation: boolean,
-      usiVal: number,
-      customAssets?: PortfolioAsset[]
-    ) => {
-      const target = portfolioMap.get(toId);
-      if (!target && !customAssets) return;
-      const assetsToUse = customAssets ?? target!.assets;
-
-      let totalValue = cash;
-      Object.entries(holdings).forEach(([t, shares]) => { totalValue += shares * getPrice(t, date); });
-
-      const curW: { [t: string]: number } = {};
-      Object.entries(holdings).forEach(([t, shares]) => {
-        curW[t] = totalValue > 0 ? (shares * getPrice(t, date)) / totalValue : 0;
-      });
-      const tgtW: { [t: string]: number } = {};
-      assetsToUse.forEach(a => { tgtW[a.ticker] = a.weight / 100; });
-
+    const execute = (o: Order, date: string) => {
+      let value = cash;
+      for (const [t, sh] of Object.entries(holdings)) value += sh * priceOn(t, date);
+      const cur: { [t: string]: number } = {};
+      for (const [t, sh] of Object.entries(holdings)) cur[t] = value > 0 ? (sh * priceOn(t, date)) / value : 0;
+      const tgt: { [t: string]: number } = {};
+      o.assets.forEach(a => { tgt[a.ticker] = (tgt[a.ticker] ?? 0) + a.weight / 100; });
       let turnover = 0;
-      new Set([...Object.keys(curW), ...Object.keys(tgtW)]).forEach(t => {
-        turnover += Math.abs((tgtW[t] ?? 0) - (curW[t] ?? 0));
+      new Set([...Object.keys(cur), ...Object.keys(tgt)]).forEach(t => { turnover += Math.abs((tgt[t] ?? 0) - (cur[t] ?? 0)); });
+      const cost = (turnover / 2) * value * (transactionFee / 100);
+      const investable = value - cost;
+      const next: { [t: string]: number } = {};
+      o.assets.forEach(a => {
+        const p = priceOn(a.ticker, date);
+        if (p > 0) next[a.ticker] = (next[a.ticker] ?? 0) + (investable * a.weight / 100) / p;
       });
-      const cost       = ((turnover / 2) * totalValue) * (transactionFee / 100);
-      const investable = totalValue - cost;
-
-      const newH: { [t: string]: number } = {};
-      assetsToUse.forEach(a => {
-        const price = getPrice(a.ticker, date);
-        if (price > 0) newH[a.ticker] = (investable * a.weight / 100) / price;
-      });
-
-      if (isRotation && target) {
-        const prev = portfolioMap.get(activePortfolioId);
-        trades.push({
-          date, type: 'rotate',
-          fromPortfolio: prev ? { id: prev.id, name: prev.name } : null,
-          toPortfolio:   { id: target.id, name: target.name },
-          capitalBefore: totalValue, capitalAfter: investable,
-          transactionCost: cost,
-          spyPrice: getPrice(benchmarkTicker, date),
-          spyIndicatorValue: usiVal,
-          reason,
-        });
+      if (o.rotation) {
+        trades.push({ signalDate: o.signalDate, date, fromPortfolio: heldId || null, toPortfolio: o.toId, usi: o.usi, reason: o.reason, cost });
       }
-
-      holdings = newH;
+      totalFees += cost;
+      holdings = next;
       cash = 0;
-      activePortfolioId = toId;
+      heldId = o.toId;
+      heldAssets = o.assets;
     };
 
-    // ── CONSECUTIVE-DAY COUNTERS & BEAR SHIELD STATE ─────────────────────────
-    let cExtremeBuy = 0;
-    let cHeavyBuy   = 0;
-    let cStrongBuy  = 0;
-    let cBuy        = 0;
-
-    let extremeBuyLockDays = 0;
-    let bearLockoutDays    = 0;
-
-    let bearMode        = false;
-    let bearDays        = 0;
-    let peakUsi         = 0;
-    let daysInBuy       = 0;
-    let climaxTriggered = false;
-    let minUsiInTrade   = 99999;
-    let daysInHighBeta  = 0;
-
-    // ── MAIN LOOP ────────────────────────────────────────────────────────────
-    let firstDay = true;
+    // Signal-side state (what the model has decided to hold)
+    let intendedId = 'neutral';
+    let currentTop10Key = '';
+    let cExtremeBuy = 0, cHeavyBuy = 0, cStrongBuy = 0, cBuy = 0;
+    let extremeBuyLockDays = 0, bearLockoutDays = 0;
+    let bearMode = false, bearDays = 0, peakUsi = 0, daysInBuy = 0;
+    let climaxTriggered = false, minUsiInTrade = 99999, daysInHighBeta = 0;
 
     for (let dayIdx = 0; dayIdx < tradingDates.length; dayIdx++) {
-      const date   = tradingDates[dayIdx];
-      const absIdx = benchmarkMap.get(date) ?? dayIdx;
-      const usi    = fullUsi[absIdx];
+      const date = tradingDates[dayIdx];
+      const absIdx = spyMap.get(date)!;
+      const usi = fullUsi[absIdx];
 
-      // Refresh live prices for all tracked US Top 10 candidates on this date
-      if (useTop10Neutral) {
-        for (const ticker of Object.keys(SHARE_ANCHORS)) {
-          getPrice(ticker, date);
-        }
-      }
+      // 1) Execute orders whose time has come, at today's close.
+      while (queue.length && queue[0].execIdx <= dayIdx) execute(queue.shift()!.order, date);
 
+      // 2) Compute today's signal from data up to and including today's close.
       if (extremeBuyLockDays > 0) extremeBuyLockDays--;
-      if (bearLockoutDays > 0)    bearLockoutDays--;
-
+      if (bearLockoutDays > 0) bearLockoutDays--;
       if (usi >= USI_BUY_FLOOR) daysInBuy++;
       else if (usi < 120) daysInBuy = 0;
 
-      const sma5     = fullUsiSma5[absIdx];
-      const sma10    = fullUsiSma10[absIdx];
-      const sma20    = fullUsiSma20[absIdx];
-      const sma30    = fullUsiSma30[absIdx];
-      const sma50    = fullUsiSma50[absIdx];
-      const sma100   = fullUsiSma100[absIdx];
-      const prevUsi  = fullUsi[Math.max(0, absIdx - 1)];
-      const prevSma5 = fullUsiSma5[Math.max(0, absIdx - 1)];
+      const sma5 = uSma5[absIdx], sma10 = uSma10[absIdx], sma20 = uSma20[absIdx];
+      const sma30 = uSma30[absIdx], sma50 = uSma50[absIdx], sma100 = uSma100[absIdx];
+      const prevUsi = fullUsi[Math.max(0, absIdx - 1)];
+      const prevSma5 = uSma5[Math.max(0, absIdx - 1)];
       const spyClose = spyCloses[absIdx] || 1;
-      const spyH     = spyHigh252[absIdx] || spyClose;
-      const spyDd    = Math.max(0, (spyH - spyClose) / (spyH || 1));
+      const spyH = spyHigh252[absIdx] || spyClose;
+      const spyDd = Math.max(0, (spyH - spyClose) / (spyH || 1));
 
-      let targetId = activePortfolioId;
-      let reason   = '';
-
-      // ── PURE FEAR-INDEX (USI) BEAR MARKET & CORRECTION DETECTOR ────────────
+      let targetId = intendedId;
+      let reason = '';
       let handledByBearEngine = false;
 
       if (useBearShield) {
-        // Dynamic Lockout Reset:
-        // bearLockoutDays prevents whipsawing back into Bear Shield during the SAME capitulation cluster (e.g. Oct-Nov 2008).
-        // Once USI cools below 260 (meaning the capitulation bounce has completed, e.g., Aug 2022), clear the lockout so we are ready if a new Bear Wave starts!
-        if (bearLockoutDays > 0 && usi < 260) {
-          bearLockoutDays = 0;
-        }
+        if (bearLockoutDays > 0 && usi < 260) bearLockoutDays = 0;
 
-        // 1. Multi-Wave / Structural Bear & Correction (e.g. April, Aug & Dec 2022 Waves, Summer 2008, Dec 2018):
-        //    - SPY is in a confirmed structural downtrend (below 200-SMA with Death Cross or accelerating breakdown)
-        //    - Background fear memory is already primed from a prior wave (SMA50 >= 175 or SMA100 >= 135)
-        //    - A new fear wave surges UP into the 528..680 zone (eliminating false mid-cycle triggers in 2010–2011)
         const isStructuralDowntrend =
           spyClose < spySma200[absIdx] &&
           ((spySma50[absIdx] < spySma200[absIdx] * 0.98 && spyDd >= 0.124) ||
            (spySma50[absIdx] < spySma200[absIdx] * 0.99 && spyDd >= 0.11 && sma20 < 320));
-
         const isWaveStarting =
-          usi >= 528 &&
-          usi <= 680 &&
-          usi > prevUsi &&
-          sma5 > prevSma5 &&
+          usi >= 528 && usi <= 680 && usi > prevUsi && sma5 > prevSma5 &&
           (sma5 > sma20 * 1.15 || (usi > sma20 * 1.05 && usi > sma5 * 1.30));
-
         const isSecondaryCrashWave =
-          bearLockoutDays === 0 &&
-          isStructuralDowntrend &&
-          sma50 >= 2000 &&
-          usi >= 5500 &&
-          usi > sma20 * 1.25 &&
-          sma5 > sma20;
-
+          bearLockoutDays === 0 && isStructuralDowntrend && sma50 >= 2000 && usi >= 5500 && usi > sma20 * 1.25 && sma5 > sma20;
         const triggerMultiWaveBear =
-          bearLockoutDays === 0 &&
-          isStructuralDowntrend &&
-          (sma50 >= 175 || sma100 >= 135) &&
-          isWaveStarting;
-
-        // 2. Acute Black Swan Crash Velocity (e.g. Feb 27 / March 2020):
-        //    Sudden vertical crash from a calm bull market: SPY breaks below 200-SMA with DD >= 12%,
-        //    while 5-day fear explodes > 2.45x above 20-day fear (USI >= 680 while SMA50 < 100, catching the crash at the START!)
+          bearLockoutDays === 0 && isStructuralDowntrend && (sma50 >= 175 || sma100 >= 135) && isWaveStarting;
         const triggerAcuteCrash =
-          bearLockoutDays === 0 &&
-          spyClose < spySma200[absIdx] &&
-          spyDd >= 0.12 &&
-          usi >= 680 &&
-          sma50 < 100 &&
-          sma5 > sma20 * 2.45;
+          bearLockoutDays === 0 && spyClose < spySma200[absIdx] && spyDd >= 0.12 && usi >= 680 && sma50 < 100 && sma5 > sma20 * 2.45;
 
         if (!bearMode && (triggerMultiWaveBear || triggerAcuteCrash || isSecondaryCrashWave)) {
-          bearMode           = true;
-          bearDays           = 0;
-          peakUsi            = usi;
-          extremeBuyLockDays = 0;
-          climaxTriggered    = false;
-          targetId           = 'bear-shield';
-          reason             = triggerAcuteCrash
-            ? `USI=${usi.toFixed(0)} Acute Crash Shock (DD=${(spyDd * 100).toFixed(1)}%, SMA5 > 2.45×SMA20) — Crash Protection (Bear Shield)`
-            : `USI=${usi.toFixed(0)} Multi-Wave Structural Bear (DD=${(spyDd * 100).toFixed(1)}%, SMA50=${sma50.toFixed(0)}, SMA100=${sma100.toFixed(0)}) — Bear Shield Activated`;
+          bearMode = true; bearDays = 0; peakUsi = usi; extremeBuyLockDays = 0; climaxTriggered = false;
+          targetId = 'bear-shield';
+          reason = triggerAcuteCrash
+            ? `Acute crash: USI ${usi.toFixed(0)}, SPY drawdown ${(spyDd * 100).toFixed(1)}%`
+            : `Structural bear wave: USI ${usi.toFixed(0)}, SPY drawdown ${(spyDd * 100).toFixed(1)}%`;
           handledByBearEngine = true;
         } else if (bearMode) {
           bearDays++;
           peakUsi = Math.max(peakUsi, usi);
-
-          // Capitulation Spike Exhaustion:
-          // A violent panic peak occurred (peakUsi >= 1900, e.g., Dec 2018 [1956], June 2022 [2100], Sept/Oct 2022 [2106], March 2020 [4649], 2008-2009 [7823]),
-          // followed by 2 consecutive days of cooling below SMA5 and SMA20 with SMA5 turning downwards!
           const isCapitulationSpike =
-            peakUsi >= 1900 &&
-            bearDays >= 6 &&
-            usi < sma5 * 0.82 &&
-            prevUsi < prevSma5 * 0.88 &&
-            sma5 < prevSma5 &&
-            usi < sma20 &&
-            (peakUsi < 5000 || sma50 >= 4800 || usi < 2500);
-
-          // Normalization Exit: Fear quietly subsides below 188 with negative momentum
+            peakUsi >= 1900 && bearDays >= 6 && usi < sma5 * 0.82 && prevUsi < prevSma5 * 0.88 &&
+            sma5 < prevSma5 && usi < sma20 && (peakUsi < 5000 || sma50 >= 4800 || usi < 2500);
           const isNormalized = bearDays >= 6 && usi < USI_BUY_FLOOR && sma10 < sma30;
-
           if (isCapitulationSpike) {
-            bearMode            = false;
-            climaxTriggered     = true;
-            bearLockoutDays     = 65; // Lockout during active capitulation cluster; clears early once USI cools < 260
-            extremeBuyLockDays  = 10;
-            minUsiInTrade       = usi;
-            daysInHighBeta      = 0;
-            daysInBuy           = 0;
-            targetId            = 'extreme-buy';
-            reason              = `USI=${usi.toFixed(0)} Capitulation Peak Exhaustion (Peak USI=${peakUsi.toFixed(0)}, Cooling < SMA5=${sma5.toFixed(0)}) — Seize V-Bottom in Extreme Buy`;
-            handledByBearEngine = true;
+            bearMode = false; climaxTriggered = true; bearLockoutDays = 65; extremeBuyLockDays = 10;
+            minUsiInTrade = usi; daysInHighBeta = 0; daysInBuy = 0;
+            targetId = 'extreme-buy';
+            reason = `Capitulation exhausted: peak USI ${peakUsi.toFixed(0)}, now ${usi.toFixed(0)}`;
           } else if (isNormalized) {
-            bearMode            = false;
-            daysInBuy           = 0;
-            targetId            = 'neutral';
-            reason              = `USI=${usi.toFixed(0)} < ${USI_BUY_FLOOR} & SMA10 < SMA30 — Bear Regime Normalized → Neutral`;
-            handledByBearEngine = true;
+            bearMode = false; daysInBuy = 0;
+            targetId = 'neutral';
+            reason = `Stress normalised: USI ${usi.toFixed(0)} < ${USI_BUY_FLOOR.toFixed(0)}`;
           } else {
-            // Stay firmly locked in Bear Shield throughout the structural drop
-            targetId            = 'bear-shield';
-            handledByBearEngine = true;
+            targetId = 'bear-shield';
           }
+          handledByBearEngine = true;
         }
-
-        if (climaxTriggered && extremeBuyLockDays === 0 && usi < USI_HEAVY_FLOOR) {
-          climaxTriggered = false;
-        }
+        if (climaxTriggered && extremeBuyLockDays === 0 && usi < USI_HEAVY_FLOOR) climaxTriggered = false;
       }
 
-      // ── BULLISH DIVERGENCE HOLD & DIP-BUYING LADDER ────────────────────────
       if (!handledByBearEngine) {
-        const inHighBeta =
-          activePortfolioId === 'extreme-buy' ||
-          activePortfolioId === 'heavy-buy' ||
-          activePortfolioId === 'strong-buy';
-
+        const inHighBeta = intendedId === 'extreme-buy' || intendedId === 'heavy-buy' || intendedId === 'strong-buy';
         if (inHighBeta) {
           daysInHighBeta++;
-          // Record the lowest stress level once 5-day average stress has cooled below Buy floor (187.95)
-          if (sma5 < USI_BUY_FLOOR && usi < minUsiInTrade) {
-            minUsiInTrade = usi;
-          }
+          if (sma5 < USI_BUY_FLOOR && usi < minUsiInTrade) minUsiInTrade = usi;
         } else {
-          minUsiInTrade  = 99999;
+          minUsiInTrade = 99999;
           daysInHighBeta = 0;
         }
 
-        cExtremeBuy = usi >= USI_EXTREME_FLOOR                          ? cExtremeBuy + 1 : 0;
-        cHeavyBuy   = usi >= USI_HEAVY_FLOOR && usi < USI_EXTREME_FLOOR ? cHeavyBuy   + 1 : 0;
-        cStrongBuy  = usi >= USI_STRONG_FLOOR && usi < USI_HEAVY_FLOOR  ? cStrongBuy  + 1 : 0;
-        cBuy        = usi >= USI_BUY_FLOOR    && usi < USI_STRONG_FLOOR ? cBuy        + 1 : 0;
+        cExtremeBuy = usi >= USI_EXTREME_FLOOR ? cExtremeBuy + 1 : 0;
+        cHeavyBuy = usi >= USI_HEAVY_FLOOR && usi < USI_EXTREME_FLOOR ? cHeavyBuy + 1 : 0;
+        cStrongBuy = usi >= USI_STRONG_FLOOR && usi < USI_HEAVY_FLOOR ? cStrongBuy + 1 : 0;
+        cBuy = usi >= USI_BUY_FLOOR && usi < USI_STRONG_FLOOR ? cBuy + 1 : 0;
 
-        const tierRank: { [id: string]: number } = {
-          'bear-shield': -1,
-          'neutral':      0,
-          'buy':          1,
-          'strong-buy':   2,
-          'heavy-buy':    3,
-          'extreme-buy':  4,
-        };
-        const curRank = tierRank[activePortfolioId] ?? 0;
-
-        // When waiting in Neutral after locking in a Bear Market Rally during a deep chronic Bear Market (SMA50 >= 400 & SMA100 >= 400),
-        // stay in Neutral until Bear Shield triggers or the macro downtrend clears.
+        const curRank = TIER_RANK[intendedId] ?? 0;
         const inDeepBearWait =
-          spySma50[absIdx] < spySma200[absIdx] * 0.98 &&
-          spyClose <= spySma200[absIdx] * 1.015 &&
-          sma50 >= 400 &&
-          sma100 >= 400 &&
-          activePortfolioId === 'neutral';
+          spySma50[absIdx] < spySma200[absIdx] * 0.98 && spyClose <= spySma200[absIdx] * 1.015 &&
+          sma50 >= 400 && sma100 >= 400 && intendedId === 'neutral';
 
         if (!inDeepBearWait && cExtremeBuy >= 2 && curRank < 4) {
-          targetId           = 'extreme-buy';
-          reason             = `USI=${usi.toFixed(0)} ≥ ${USI_EXTREME_FLOOR} for 2 consecutive closes — Upgrade to Extreme Buy`;
-          extremeBuyLockDays = 15;
-          minUsiInTrade      = 99999;
+          targetId = 'extreme-buy'; reason = `USI ${usi.toFixed(0)} ≥ ${USI_EXTREME_FLOOR} for 2 closes`;
+          extremeBuyLockDays = 15; minUsiInTrade = 99999;
         } else if (!inDeepBearWait && cHeavyBuy >= 2 && curRank < 3) {
-          targetId      = 'heavy-buy';
-          reason        = `USI=${usi.toFixed(0)} ≥ ${USI_HEAVY_FLOOR} for 2 consecutive closes — Upgrade to Heavy Buy`;
+          targetId = 'heavy-buy'; reason = `USI ${usi.toFixed(0)} ≥ ${USI_HEAVY_FLOOR.toFixed(0)} for 2 closes`;
           minUsiInTrade = 99999;
         } else if (!inDeepBearWait && cStrongBuy >= 2 && curRank < 2) {
-          targetId      = 'strong-buy';
-          reason        = `USI=${usi.toFixed(0)} ≥ ${USI_STRONG_FLOOR} for 2 consecutive closes — Upgrade to Strong Buy`;
+          targetId = 'strong-buy'; reason = `USI ${usi.toFixed(0)} ≥ ${USI_STRONG_FLOOR.toFixed(0)} for 2 closes`;
           minUsiInTrade = 99999;
         } else if (!inDeepBearWait && cBuy >= 2 && curRank < 1) {
-          targetId = 'buy';
-          reason   = `USI=${usi.toFixed(0)} ≥ ${USI_BUY_FLOOR} for 2 consecutive closes — Upgrade to Buy`;
+          targetId = 'buy'; reason = `USI ${usi.toFixed(0)} ≥ ${USI_BUY_FLOOR.toFixed(0)} for 2 closes`;
         } else if (curRank >= 2) {
-          // BULLISH DIVERGENCE HOLD & CALM BULL DE-LEVERAGING:
-          // Do NOT downgrade step-by-step while USI is falling and SPY is rising!
-          // Stay in Strong Buy / Heavy Buy / Extreme Buy until:
-          // 1) A serious upward stress spike occurs from low/cooled stress levels (USI >= max(165, minUsi + 95) while SMA20 < 225), OR
-          // 2) In a deep chronic Bear Market (SMA50 & SMA100 >= 400), the Bear Market Rally cools below 225 near the 200-SMA resistance, OR
-          // 3) Once V-bottom recovery completes and stress stabilizes in calm bull territory (USI < 75 & SMA20 < 75 after 25+ days),
-          //    de-leverage from Heavy/Extreme Buy back to Neutral (US Top 10) to cut portfolio volatility in half.
           const targetSpike = Math.max(165, minUsiInTrade + 95);
           const isSharpSpikeFromLow =
-            minUsiInTrade < 165 &&
-            usi >= targetSpike &&
-            usi > prevUsi &&
-            sma20 < 225 &&
+            minUsiInTrade < 165 && usi >= targetSpike && usi > prevUsi && sma20 < 225 &&
             (sma5 > sma20 || (usi > sma10 * 1.25 && sma5 > prevSma5));
-
           const isBearRallyProfitLock =
-            spySma50[absIdx] < spySma200[absIdx] * 0.98 &&
-            spyClose <= spySma200[absIdx] * 1.015 &&
-            sma50 >= 400 &&
-            sma100 >= 400 &&
-            daysInHighBeta >= 15 &&
-            usi < 225 &&
-            spyClose > spySma50[absIdx];
-
-          const isCalmBullDeleverage =
-            curRank >= 3 &&
-            daysInHighBeta >= 25 &&
-            sma20 < 75 &&
-            usi < 75;
-
+            spySma50[absIdx] < spySma200[absIdx] * 0.98 && spyClose <= spySma200[absIdx] * 1.015 &&
+            sma50 >= 400 && sma100 >= 400 && daysInHighBeta >= 15 && usi < 225 && spyClose > spySma50[absIdx];
+          const isCalmBullDeleverage = curRank >= 3 && daysInHighBeta >= 25 && sma20 < 75 && usi < 75;
           if (isSharpSpikeFromLow) {
-            targetId = 'neutral';
-            reason   = `USI=${usi.toFixed(0)} Stress Spike from Cooled Level (Min USI=${minUsiInTrade.toFixed(0)} → ${usi.toFixed(0)}) — Divergence Ended → Neutral`;
+            targetId = 'neutral'; reason = `Stress spike from ${minUsiInTrade.toFixed(0)} to ${usi.toFixed(0)}`;
           } else if (isBearRallyProfitLock) {
-            targetId = 'neutral';
-            reason   = `USI=${usi.toFixed(0)} Bear Rally Divergence Completed (SPY > SMA50, USI < 225) — Lock Profit → Neutral`;
+            targetId = 'neutral'; reason = `Bear-market rally faded near the 200-day average`;
           } else if (isCalmBullDeleverage) {
-            targetId = 'neutral';
-            reason   = `USI=${usi.toFixed(0)} & SMA20=${sma20.toFixed(0)} < 75 after ${daysInHighBeta}d V-Recovery — De-Leverage to Neutral (US Top 10)`;
+            targetId = 'neutral'; reason = `Calm after ${daysInHighBeta} days: de-leverage`;
           }
         } else if (curRank === 1 && usi < 120) {
-          targetId = 'neutral';
-          reason   = `USI=${usi.toFixed(0)} < 120 — Exit Buy → Neutral`;
+          targetId = 'neutral'; reason = `USI ${usi.toFixed(0)} < 120`;
         }
       }
 
-      const isRotation = targetId !== activePortfolioId;
-      const isNewMonth = dayIdx > 0 && date.slice(0, 7) !== tradingDates[dayIdx - 1].slice(0, 7);
-
-      if (firstDay) {
-        if (useTop10Neutral && targetId === 'neutral') {
-          const top10Assets = getTop10USAssets(date);
-          latestTop10       = top10Assets.map(a => a.ticker);
-          currentTop10Key   = [...latestTop10].sort().join(',');
-          allocate('neutral', date, `Initial: Top 10 US (${latestTop10.join(', ')})`, false, usi, top10Assets);
-        } else {
-          allocate(targetId, date, `Initial: ${portfolioMap.get(targetId)?.name ?? targetId}`, false, usi);
-        }
-        firstDay = false;
-      } else if (isRotation) {
-        if (useTop10Neutral && targetId === 'neutral') {
-          const top10Assets = getTop10USAssets(date);
-          latestTop10       = top10Assets.map(a => a.ticker);
-          currentTop10Key   = [...latestTop10].sort().join(',');
-          allocate('neutral', date, `${reason} [Top 10 US: ${latestTop10.join(', ')}]`, true, usi, top10Assets);
-        } else {
-          allocate(targetId, date, reason, true, usi);
-        }
-      } else if (useTop10Neutral && activePortfolioId === 'neutral' && isNewMonth) {
-        // At the beginning of each month in Neutral, check Top 10 largest US companies and reallocate if changed
-        const top10Assets = getTop10USAssets(date);
-        const tickersList = top10Assets.map(a => a.ticker);
-        const newKey      = [...tickersList].sort().join(',');
-        latestTop10       = tickersList;
-        if (newKey !== currentTop10Key) {
-          currentTop10Key = newKey;
-          top10RebalanceCount++;
-          allocate('neutral', date, `Monthly Top 10 US Reallocation (${tickersList.join(', ')})`, false, usi, top10Assets);
-        }
-      } else if (rebalanceFrequency !== 'none' && dayIdx > 0) {
-        const prev = new Date(tradingDates[dayIdx - 1]), curr = new Date(date);
-        const doRebalance =
-          (rebalanceFrequency === 'monthly' && curr.getMonth() !== prev.getMonth()) ||
-          (rebalanceFrequency === 'weekly'  && Math.floor(curr.getDate() / 7) !== Math.floor(prev.getDate() / 7));
-        if (doRebalance) allocate(activePortfolioId, date, `Periodic ${rebalanceFrequency} rebalance`, false, usi);
-      }
-
-      // ── MARK-TO-MARKET ───────────────────────────────────────────────────
-      let dayValue = cash;
-      Object.entries(holdings).forEach(([t, shares]) => { dayValue += shares * getPrice(t, date); });
-
-      const bmIdx    = benchmarkMap.get(date);
-      const spyPrice = bmIdx !== undefined ? benchmarkCloses[bmIdx] : (lastPrice[benchmarkTicker] ?? bmStartPrice);
-
-      equityCurve.push({
-        date,
-        strategyValue:   Math.round(dayValue                                   * 100) / 100,
-        benchmarkValue:  Math.round(simCapital * (spyPrice / bmStartPrice) * 100) / 100,
-        activePortfolioId,
-        usiValue:  usi,
-        s5fiValue: fullUsiSma5[absIdx] ?? 0,
-        ushValue:  fullUsiSma20[absIdx] ?? 0,
-      });
-    }
-
-    // Ensure latestTop10 is populated at the end of simulation
-    if (useTop10Neutral) {
-      const endTop10 = getTop10USAssets(tradingDates[tradingDates.length - 1]);
-      latestTop10 = endTop10.map(a => a.ticker);
-    }
-
-    // ── METRICS ──────────────────────────────────────────────────────────────
-    const lastPt  = equityCurve[equityCurve.length - 1];
-    const firstPt = equityCurve[0];
-    const years   = Math.max(0.01, (new Date(lastPt.date).getTime() - new Date(firstPt.date).getTime()) / (365.25 * 86400000));
-
-    const totalRet  = ((lastPt.strategyValue  - simCapital) / simCapital) * 100;
-    const benchRet  = ((lastPt.benchmarkValue - simCapital) / simCapital) * 100;
-    const cagr      = (Math.pow(lastPt.strategyValue  / simCapital, 1 / years) - 1) * 100;
-    const benchCagr = (Math.pow(lastPt.benchmarkValue / simCapital, 1 / years) - 1) * 100;
-
-    let stratPeak = simCapital, benchPeak = simCapital, maxDD = 0, benchMaxDD = 0;
-    const stratRets: number[] = [], benchRets: number[] = [];
-
-    equityCurve.forEach((pt, i) => {
-      if (pt.strategyValue  > stratPeak) stratPeak = pt.strategyValue;
-      if (pt.benchmarkValue > benchPeak) benchPeak = pt.benchmarkValue;
-      maxDD      = Math.max(maxDD,      ((stratPeak - pt.strategyValue)  / stratPeak)  * 100);
-      benchMaxDD = Math.max(benchMaxDD, ((benchPeak - pt.benchmarkValue) / benchPeak) * 100);
-      if (i > 0) {
-        stratRets.push(pt.strategyValue  / equityCurve[i - 1].strategyValue  - 1);
-        benchRets.push(pt.benchmarkValue / equityCurve[i - 1].benchmarkValue - 1);
-      }
-    });
-
-    const sharpe = (rets: number[], ann: number) => {
-      if (rets.length < 2) return 0;
-      const avg = rets.reduce((a, b) => a + b, 0) / rets.length;
-      const vol = Math.sqrt(rets.reduce((a, r) => a + Math.pow(r - avg, 2), 0) / (rets.length - 1)) * Math.sqrt(252);
-      return vol === 0 ? 0 : (ann - 2.0) / (vol * 100);
-    };
-
-    let wins = 0;
-    trades.forEach((trade, i) => {
-      const exitDate = i + 1 < trades.length ? trades[i + 1].date : tradingDates[tradingDates.length - 1];
-      const exitPt   = equityCurve.find(p => p.date >= exitDate);
-      if (exitPt) {
-        const ret = (exitPt.strategyValue - trade.capitalAfter) / trade.capitalAfter * 100;
-        trade.returnPct = Math.round(ret * 100) / 100;
-        if (ret > 0) wins++;
-      }
-    });
-
-    const metrics: Metrics = {
-      totalReturnPct:       Math.round(totalRet  * 100) / 100,
-      benchmarkReturnPct:   Math.round(benchRet  * 100) / 100,
-      cagr:                 Math.round(cagr       * 100) / 100,
-      benchmarkCagr:        Math.round(benchCagr  * 100) / 100,
-      maxDrawdown:          Math.round(maxDD       * 100) / 100,
-      benchmarkMaxDrawdown: Math.round(benchMaxDD  * 100) / 100,
-      sharpeRatio:          Math.round(sharpe(stratRets, cagr)       * 100) / 100,
-      benchmarkSharpeRatio: Math.round(sharpe(benchRets, benchCagr)  * 100) / 100,
-      totalTrades:  trades.length,
-      totalFees:    Math.round(trades.reduce((s, t) => s + t.transactionCost, 0) * 100) / 100,
-      winRate:      Math.round((trades.length > 0 ? wins / trades.length * 100 : 0) * 100) / 100,
-    };
-
-
-      return { equityCurve, trades, metrics, latestTop10, top10RebalanceCount };
-    };
-
-    // Run primary requested period
-    const mainSim = simulatePeriod(startDate, endDate, initialCapital);
-
-    // Compute isolated yearly performance for all calendar years in the dataset
-    // (each year starting on Jan 1 with fresh $10,000 in Neutral)
-    const distinctYears = Array.from(new Set(allDates.map(d => d.slice(0, 4)))).sort();
-    const isolatedYearlyStats: YearlyStat[] = distinctYears.map(yr => {
-      const yrDates = allDates.filter(d => d.startsWith(yr));
-      if (yrDates.length === 0) return null;
-      const yrStart = yrDates[0];
-      const yrEnd   = yrDates[yrDates.length - 1];
-
-      let yrRes: BacktestResult;
-      if (startDate === yrStart && endDate === yrEnd) {
-        yrRes = mainSim;
-      } else {
-        yrRes = simulatePeriod(yrStart, yrEnd, 10000);
-      }
-
-      return {
-        year: yr,
-        strategyReturn: yrRes.metrics.totalReturnPct,
-        benchmarkReturn: yrRes.metrics.benchmarkReturnPct,
-        outperformance: Math.round((yrRes.metrics.totalReturnPct - yrRes.metrics.benchmarkReturnPct) * 100) / 100,
+      const lag = Math.max(0, method.executionLagDays);
+      const order = (o: Omit<Order, 'signalDate' | 'usi'>) => {
+        const full = { ...o, signalDate: date, usi };
+        if (lag === 0) execute(full, date);
+        else queue.push({ execIdx: dayIdx + lag, order: full });
       };
-    }).filter(Boolean) as YearlyStat[];
+      const assetsFor = (id: string): PortfolioAsset[] => {
+        if (useTop10Neutral && id === 'neutral') {
+          const top = getTop10(date);
+          currentTop10Key = top.map(a => a.ticker).sort().join(',');
+          return top;
+        }
+        return portfolioMap.get(id)!.assets;
+      };
+
+      const isNewMonth = dayIdx > 0 && date.slice(0, 7) !== tradingDates[dayIdx - 1].slice(0, 7);
+      if (dayIdx === 0) {
+        // Initial allocation happens on day 0 itself (no earlier signal exists).
+        execute({ toId: targetId, assets: assetsFor(targetId), reason: 'Initial allocation', rotation: false, signalDate: date, usi }, date);
+        intendedId = targetId;
+      } else if (targetId !== intendedId) {
+        order({ toId: targetId, assets: assetsFor(targetId), reason, rotation: true });
+        intendedId = targetId;
+      } else if (useTop10Neutral && intendedId === 'neutral' && isNewMonth) {
+        const top = getTop10(date);
+        const key = top.map(a => a.ticker).sort().join(',');
+        if (key !== currentTop10Key) {
+          currentTop10Key = key;
+          order({ toId: 'neutral', assets: top, reason: 'Monthly Top-10 update', rotation: false });
+        }
+      }
+
+      // 3) Mark to market at today's close.
+      let value = cash;
+      for (const [t, sh] of Object.entries(holdings)) value += sh * priceOn(t, date);
+      const bm = initialCapital * (priceOn(benchmarkTicker, date) / benchmarkBase);
+      equityCurve.push({ date, strategy: value, benchmark: bm, portfolioId: heldId, usi });
+    }
+
+    // ── Metrics
+    const rfDaily = (date: string, prevDate: string): number => {
+      const a = dateIndex['BIL']?.get(prevDate), b = dateIndex['BIL']?.get(date);
+      if (a === undefined || b === undefined) return 0;
+      return workingData['BIL'][b].close / workingData['BIL'][a].close - 1;
+    };
+
+    const ratios = (key: 'strategy' | 'benchmark'): RatioSet => {
+      const first = equityCurve[0], last = equityCurve[equityCurve.length - 1];
+      const yrs = (Date.parse(last.date) - Date.parse(first.date)) / (365.25 * 86400000);
+      const rets: number[] = [], excess: number[] = [];
+      let peak = first[key], mdd = 0;
+      for (let i = 1; i < equityCurve.length; i++) {
+        const r = equityCurve[i][key] / equityCurve[i - 1][key] - 1;
+        rets.push(r);
+        excess.push(r - rfDaily(equityCurve[i].date, equityCurve[i - 1].date));
+        peak = Math.max(peak, equityCurve[i][key]);
+        mdd = Math.max(mdd, 1 - equityCurve[i][key] / peak);
+      }
+      const mean = (x: number[]) => x.reduce((a, b) => a + b, 0) / x.length;
+      const sd = (x: number[]) => { const m = mean(x); return Math.sqrt(x.reduce((a, v) => a + (v - m) ** 2, 0) / (x.length - 1)); };
+      return {
+        cagr: (Math.pow(last[key] / first[key], 1 / yrs) - 1) * 100,
+        volatility: sd(rets) * Math.sqrt(252) * 100,
+        sharpe: (mean(excess) / sd(excess)) * Math.sqrt(252),
+        maxDrawdown: mdd * 100,
+      };
+    };
+
+    const years = (Date.parse(equityCurve[equityCurve.length - 1].date) - Date.parse(equityCurve[0].date)) / (365.25 * 86400000);
+    const metrics: Metrics = {
+      strategy: ratios('strategy'),
+      benchmark: ratios('benchmark'),
+      years,
+      rotationsPerYear: trades.length / years,
+      feesPct: (totalFees / initialCapital) * 100,
+    };
+
+    // ── Calendar years cut from the one continuous run
+    const yearly: YearlyStat[] = [];
+    const lastDate = equityCurve[equityCurve.length - 1].date;
+    const lastYearComplete = lastDate.slice(5) >= '12-28';
+    let prevEnd: EquityPoint | null = null;
+    const byYear = new Map<string, EquityPoint[]>();
+    equityCurve.forEach(p => {
+      const y = p.date.slice(0, 4);
+      if (!byYear.has(y)) byYear.set(y, []);
+      byYear.get(y)!.push(p);
+    });
+    for (const [year, pts] of byYear) {
+      const base: EquityPoint = prevEnd ?? pts[0];
+      const dd = (key: 'strategy' | 'benchmark') => {
+        let peak = base[key], m = 0;
+        for (const p of pts) { peak = Math.max(peak, p[key]); m = Math.max(m, 1 - p[key] / peak); }
+        return m * 100;
+      };
+      const end = pts[pts.length - 1];
+      const s = (end.strategy / base.strategy - 1) * 100, b = (end.benchmark / base.benchmark - 1) * 100;
+      yearly.push({
+        year,
+        partial: year === lastDate.slice(0, 4) && !lastYearComplete,
+        strategyReturn: s,
+        benchmarkReturn: b,
+        excess: s - b,
+        strategyMaxDD: dd('strategy'),
+        benchmarkMaxDD: dd('benchmark'),
+        defensiveDays: (pts.filter(p => p.portfolioId === 'bear-shield').length / pts.length) * 100,
+      });
+      prevEnd = end;
+    }
+
+    const timeInRegime: { [id: string]: number } = {};
+    equityCurve.forEach(p => { timeInRegime[p.portfolioId] = (timeInRegime[p.portfolioId] ?? 0) + 100 / equityCurve.length; });
 
     return {
-      ...mainSim,
-      isolatedYearlyStats,
+      startDate,
+      endDate: lastDate,
+      equityCurve,
+      trades,
+      metrics,
+      yearly,
+      currentPortfolioId: intendedId,
+      currentHoldings: queue.length ? queue[queue.length - 1].order.assets : heldAssets,
+      timeInRegime,
     };
-  }
+  },
 };

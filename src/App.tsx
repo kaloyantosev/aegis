@@ -1,595 +1,213 @@
-import { useState, useEffect } from 'react';
-import { dataService } from './services/dataService';
+import { useEffect, useMemo, useState } from 'react';
 import { backtester } from './services/backtester';
-import { TradingViewChart } from './components/TradingViewChart';
-import { AnalyticsPanel } from './components/AnalyticsPanel';
-import { TradeLogTable } from './components/TradeLogTable';
-import { ArrowRightLeft, AlertCircle, ShieldAlert, Layers, RefreshCw } from 'lucide-react';
-import type { HistoricalDataCache, BacktestResult, Portfolio } from './types';
+import { loadPrices, type LoadedData } from './data';
+import { AGGRESSIVE, CLASSIC, REGIME_NAMES } from './portfolios';
+import { EquityChart } from './EquityChart';
+import type { BacktestResult, RatioSet } from './types';
 
-// ── CONFIG & PORTFOLIO SCHEMAS ────────────────────────────────────────────────
+const BASE = { initialCapital: 10000, transactionFee: 0.1, benchmarkTicker: 'SPY' };
 
-const CONFIG = {
-  initialCapital:     10000,
-  transactionFee:     0.1, // percent
-  rebalanceFrequency: 'none' as const,
-  benchmarkTicker:    'SPY',
-};
+const pct = (v: number, d = 1) => `${v.toFixed(d)}%`;
+const signed = (v: number, d = 1) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(d)}%`;
+const fmtDate = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+const tone = (v: number) => (v > 0 ? 'up' : v < 0 ? 'down' : '');
 
-const CLASSIC_PORTFOLIOS: Portfolio[] = [
-  {
-    id: 'neutral', name: 'Neutral',
-    description: '50% SPY, 30% XLK, 10% DBC, 10% XLF',
-    assets: [
-      { ticker: 'SPY', weight: 50 }, { ticker: 'XLK', weight: 30 },
-      { ticker: 'DBC', weight: 10 }, { ticker: 'XLF', weight: 10 },
-    ],
-  },
-  {
-    id: 'buy', name: 'Buy',
-    description: '30% SPY, 20% XLK, 10% XLG, 10% XLF, 10% XLY, 10% XLE, 10% ICLN',
-    assets: [
-      { ticker: 'SPY', weight: 30 }, { ticker: 'XLK', weight: 20 },
-      { ticker: 'XLG', weight: 10 }, { ticker: 'XLF', weight: 10 },
-      { ticker: 'XLY', weight: 10 }, { ticker: 'XLE', weight: 10 },
-      { ticker: 'ICLN', weight: 10 },
-    ],
-  },
-  {
-    id: 'strong-buy', name: 'Strong Buy',
-    description: '30% SPY, 30% XLK, 10% XLG, 20% XLF, 10% XLY',
-    assets: [
-      { ticker: 'SPY', weight: 30 }, { ticker: 'XLK', weight: 30 },
-      { ticker: 'XLG', weight: 10 }, { ticker: 'XLF', weight: 20 },
-      { ticker: 'XLY', weight: 10 },
-    ],
-  },
-  {
-    id: 'heavy-buy', name: 'Heavy Buy',
-    description: '20% SPY, 50% XLK, 30% XLG',
-    assets: [
-      { ticker: 'SPY', weight: 20 }, { ticker: 'XLK', weight: 50 },
-      { ticker: 'XLG', weight: 30 },
-    ],
-  },
-  {
-    id: 'extreme-buy', name: 'Extreme Buy',
-    description: '80% XLK, 20% TQQQ — max risk capitulation buy',
-    assets: [
-      { ticker: 'XLK', weight: 80 }, { ticker: 'TQQQ', weight: 20 },
-    ],
-  },
-  {
-    id: 'bear-shield', name: 'Bear Shield',
-    description: '75% BIL (T-Bills Cash), 25% GLD (Gold) — Bear Market / Correction Protection',
-    assets: [
-      { ticker: 'BIL', weight: 75 }, { ticker: 'GLD', weight: 25 },
-    ],
-  },
-];
+function Toggle({ label, checked, onChange, hint }: { label: string; checked: boolean; onChange: (v: boolean) => void; hint: string }) {
+  return (
+    <label className="toggle" title={hint}>
+      <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} />
+      {label}
+    </label>
+  );
+}
 
-const AGGRESSIVE_PORTFOLIOS: Portfolio[] = [
-  {
-    id: 'neutral', name: 'Neutral (US Top 10)',
-    description: 'Top 10 US Mega-Cap & Momentum Leaders (10% Equal Weight, Monthly Reallocation)',
-    assets: [
-      { ticker: 'SPY', weight: 50 }, { ticker: 'XLK', weight: 30 },
-      { ticker: 'DBC', weight: 10 }, { ticker: 'XLF', weight: 10 },
-    ],
-  },
-  {
-    id: 'buy', name: 'Buy',
-    description: '40% SPY, 35% XLK, 20% QQQ, 5% TQQQ — Low-Volatility Dip Entry',
-    assets: [
-      { ticker: 'SPY', weight: 40 }, { ticker: 'XLK', weight: 35 },
-      { ticker: 'QQQ', weight: 20 }, { ticker: 'TQQQ', weight: 5 },
-    ],
-  },
-  {
-    id: 'strong-buy', name: 'Strong Buy',
-    description: '28% SPY, 35% XLK, 25% QQQ, 12% TQQQ — Controlled Dip Leverage',
-    assets: [
-      { ticker: 'SPY', weight: 28 }, { ticker: 'XLK', weight: 35 },
-      { ticker: 'QQQ', weight: 25 }, { ticker: 'TQQQ', weight: 12 },
-    ],
-  },
-  {
-    id: 'heavy-buy', name: 'Heavy Buy',
-    description: '20% SPY, 35% XLK, 25% QQQ, 20% TQQQ — Balanced Panic Leverage',
-    assets: [
-      { ticker: 'SPY', weight: 20 }, { ticker: 'XLK', weight: 35 },
-      { ticker: 'QQQ', weight: 25 }, { ticker: 'TQQQ', weight: 20 },
-    ],
-  },
-  {
-    id: 'extreme-buy', name: 'Extreme Buy',
-    description: '10% SPY, 32% XLK, 20% QQQ, 38% TQQQ — Risk-Controlled Capitulation Recovery',
-    assets: [
-      { ticker: 'SPY', weight: 10 }, { ticker: 'XLK', weight: 32 },
-      { ticker: 'QQQ', weight: 20 }, { ticker: 'TQQQ', weight: 38 },
-    ],
-  },
-  {
-    id: 'bear-shield', name: 'Bear Shield',
-    description: '75% BIL (T-Bills Cash), 25% GLD (Gold) — Systemic Bear & Correction Shield',
-    assets: [
-      { ticker: 'BIL', weight: 75 }, { ticker: 'GLD', weight: 25 },
-    ],
-  },
-];
+function RatioRow({ label, r, muted }: { label: string; r: RatioSet; muted?: boolean }) {
+  return (
+    <tr className={muted ? 'muted' : ''}>
+      <td>{label}</td>
+      <td className="r">{pct(r.cagr)}</td>
+      <td className="r">{pct(r.volatility)}</td>
+      <td className="r">{r.sharpe.toFixed(2)}</td>
+      <td className="r">{pct(-r.maxDrawdown, 1).replace('-', '−')}</td>
+    </tr>
+  );
+}
 
-const RULES = [
-  { id: 'r1', indicator: 'SMA' as const, period: 50,  operator: 'above' as const, targetPortfolioId: 'heavy-buy' },
-  { id: 'r2', indicator: 'SMA' as const, period: 200, operator: 'above' as const, targetPortfolioId: 'buy' },
-];
-
-// ── APP ────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [latestDate, setLatestDate]           = useState(() => dataService.getLatestAvailableDate(CONFIG.benchmarkTicker));
-  const [startDate, setStartDate]             = useState('2006-01-03');
-  const [endDate, setEndDate]                 = useState(() => dataService.getLatestAvailableDate(CONFIG.benchmarkTicker));
-  const [useTop10Neutral, setUseTop10Neutral] = useState(true);
-  const [useBearShield, setUseBearShield]     = useState(true);
-  const [useAggroDips, setUseAggroDips]       = useState(true);
-  const [loading, setLoading]                 = useState(true);
-  const [syncing, setSyncing]                 = useState(false);
-  const [syncStatus, setSyncStatus]           = useState<string | null>(null);
-  const [error, setError]                     = useState<string | null>(null);
-  const [results, setResults]                 = useState<BacktestResult | null>(null);
-  const [fullRunResults, setFullRunResults]   = useState<BacktestResult | null>(null);
-  const [cache, setCache]                     = useState<HistoricalDataCache>({});
-  const [showDoc, setShowDoc]                 = useState(false);
-
-  const runBacktest = async (
-    start = startDate,
-    end = endDate,
-    top10Mode = useTop10Neutral,
-    bearShieldMode = useBearShield,
-    aggroMode = useAggroDips
-  ) => {
-    setError(null);
-    setLoading(true);
-    try {
-      const freshCache: HistoricalDataCache = {
-        ...dataService.getAllCachedData(),
-        ...cache,
-      };
-      const activePortfolios = aggroMode ? AGGRESSIVE_PORTFOLIOS : CLASSIC_PORTFOLIOS;
-      const tickers = new Set<string>([
-        CONFIG.benchmarkTicker,
-        ...activePortfolios.flatMap(p => p.assets.map(a => a.ticker)),
-      ]);
-      for (const ticker of tickers) {
-        if (!freshCache[ticker] || freshCache[ticker].length === 0) {
-          freshCache[ticker] = await dataService.getHistoricalData(ticker);
-        }
-      }
-      setCache(freshCache);
-      const dynamicConfig = {
-        ...CONFIG,
-        startDate: start,
-        endDate: end,
-        useTop10Neutral: top10Mode,
-        useBearShield: bearShieldMode,
-      };
-      const portfoliosWithNeutralLabel = activePortfolios.map(p =>
-        p.id === 'neutral'
-          ? {
-              ...p,
-              name: top10Mode ? 'Neutral (US Top 10)' : 'Neutral',
-            }
-          : p
-      );
-      const res = backtester.run(dynamicConfig, portfoliosWithNeutralLabel, RULES, 'neutral', freshCache);
-      setResults(res);
-      if (start === '2006-01-03' && end === latestDate) {
-        setFullRunResults(res);
-      }
-    } catch (e: any) {
-      setError(e.message ?? 'Simulation error');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSyncData = async (manual = false) => {
-    if (syncing) return;
-    setSyncing(true);
-    setSyncStatus('Fetching recent market data...');
-    try {
-      const { updatedCount, latestDate: newLatest } = await dataService.syncLatestData();
-      setLatestDate(newLatest);
-      const shouldUpdateEnd = endDate >= latestDate || manual;
-      const targetEnd = shouldUpdateEnd ? newLatest : endDate;
-      if (shouldUpdateEnd) {
-        setEndDate(newLatest);
-      }
-      setSyncStatus(updatedCount > 0 ? `Synced +${updatedCount} bars (${newLatest})` : `Up to date (${newLatest})`);
-      await runBacktest(startDate, targetEnd, useTop10Neutral, useBearShield, useAggroDips);
-      setTimeout(() => setSyncStatus(null), 4000);
-    } catch (e: any) {
-      setSyncStatus(`Sync: ${e.message}`);
-      setTimeout(() => setSyncStatus(null), 5000);
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  const handleSelectYear = (year: number) => {
-    const start = `${year}-01-01`;
-    const currentYear = new Date().getFullYear();
-    const end = year >= currentYear ? latestDate : `${year}-12-31`;
-    setStartDate(start);
-    setEndDate(end);
-    runBacktest(start, end, useTop10Neutral, useBearShield, useAggroDips);
-  };
-
-  const handleResetRange = () => {
-    const start = '2006-01-03';
-    const end = latestDate;
-    setStartDate(start);
-    setEndDate(end);
-    runBacktest(start, end, useTop10Neutral, useBearShield, useAggroDips);
-  };
-
-  const toggleTop10Neutral = (nextVal: boolean) => {
-    setUseTop10Neutral(nextVal);
-    runBacktest(startDate, endDate, nextVal, useBearShield, useAggroDips);
-  };
-
-  const toggleBearShield = (nextVal: boolean) => {
-    setUseBearShield(nextVal);
-    runBacktest(startDate, endDate, useTop10Neutral, nextVal, useAggroDips);
-  };
-
-  const toggleAggroDips = (nextVal: boolean) => {
-    setUseAggroDips(nextVal);
-    runBacktest(startDate, endDate, useTop10Neutral, useBearShield, nextVal);
-  };
+  const [data, setData] = useState<LoadedData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [ladder, setLadder] = useState<'aggressive' | 'classic'>('aggressive');
+  const [top10, setTop10] = useState(true);
+  const [bearShield, setBearShield] = useState(true);
+  const [result, setResult] = useState<BacktestResult | null>(null);
+  const [noTop10, setNoTop10] = useState<BacktestResult | null>(null);
 
   useEffect(() => {
-    const init = async () => {
-      await runBacktest();
-      if (!dataService.isDataRecent()) {
-        handleSyncData(false);
-      }
-    };
-    init();
+    loadPrices().then(setData).catch(e => setError(String(e.message ?? e)));
   }, []);
 
+  const portfolios = ladder === 'aggressive' ? AGGRESSIVE : CLASSIC;
+
+  useEffect(() => {
+    if (!data) return;
+    setResult(null);
+    // Yield to the browser so the loading state paints before the ~0.5 s backtest.
+    const id = setTimeout(() => {
+      try {
+        const cfg = { ...BASE, useTop10Neutral: top10, useBearShield: bearShield };
+        setResult(backtester.run(cfg, portfolios, data.cache));
+        setNoTop10(top10 ? backtester.run({ ...cfg, useTop10Neutral: false }, portfolios, data.cache) : null);
+      } catch (e) {
+        setError(String((e as Error).message ?? e));
+      }
+    }, 20);
+    return () => clearTimeout(id);
+  }, [data, portfolios, top10, bearShield]);
+
+  const yearSummary = useMemo(() => {
+    if (!result) return null;
+    const full = result.yearly.filter(y => !y.partial);
+    const beat = full.filter(y => y.excess > 0).length;
+    const sorted = full.map(y => y.excess).sort((a, b) => a - b);
+    const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : 0;
+    return { beat, total: full.length, median, worst: Math.min(...full.map(y => y.strategyReturn)) };
+  }, [result]);
+
+  if (error) return <main className="wrap"><p className="error">{error}</p></main>;
+
+  const lastPoint = result?.equityCurve[result.equityCurve.length - 1];
+
   return (
-    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
-
-      {/* Header */}
-      <header className="glass-panel" style={{
-        margin: '16px 16px 8px 16px', padding: '16px 32px', borderRadius: '16px',
-        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-        flexWrap: 'wrap', gap: '16px',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{
-            background: 'linear-gradient(135deg, var(--primary) 0%, var(--accent) 100%)',
-            padding: '10px', borderRadius: '12px', color: 'white',
-            boxShadow: '0 4px 20px var(--primary-glow)',
-          }}>
-            <ArrowRightLeft size={24} />
-          </div>
-          <div>
-            <h1 className="glow-text" style={{ fontSize: '22px', fontWeight: '800', lineHeight: 1.2 }}>
-              Aegis
-            </h1>
-            <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-              Tactical Support System & Backtest Log · $10,000 Capital
-            </span>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-          {/* Data Freshness Indicator & Update Button */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: '8px',
-            background: 'rgba(255,255,255,0.04)', padding: '6px 12px',
-            borderRadius: '8px', border: '1px solid var(--border-soft)',
-            fontSize: '12px',
-          }}>
-            <span style={{
-              width: '8px', height: '8px', borderRadius: '50%',
-              background: syncing ? '#fbbf24' : '#10b981',
-              boxShadow: syncing ? '0 0 8px #fbbf24' : '0 0 8px #10b981',
-              display: 'inline-block'
-            }} />
-            <span style={{ color: 'var(--text-secondary)' }}>
-              Data: <strong style={{ color: 'var(--text-primary)' }}>{latestDate}</strong>
-            </span>
-            <button
-              onClick={() => handleSyncData(true)}
-              disabled={syncing}
-              title="Sync latest market data via Vercel Market Data API"
-              style={{
-                display: 'flex', alignItems: 'center', gap: '5px',
-                background: syncing ? 'rgba(99, 102, 241, 0.25)' : 'rgba(255, 255, 255, 0.08)',
-                border: '1px solid var(--border-soft)',
-                color: 'var(--text-primary)',
-                padding: '4px 10px', borderRadius: '6px',
-                cursor: syncing ? 'wait' : 'pointer',
-                fontSize: '11px', fontWeight: 600,
-                transition: 'all 0.2s',
-              }}
-            >
-              <RefreshCw size={12} className={syncing ? 'animate-spin' : ''} />
-              {syncing ? 'Updating...' : 'Update Data'}
-            </button>
-            {syncStatus && (
-              <span style={{ fontSize: '11px', color: '#818cf8', fontWeight: 500, marginLeft: '4px' }}>
-                {syncStatus}
-              </span>
-            )}
-          </div>
-
-          <button
-            onClick={() => setShowDoc(true)}
-            className="btn"
-            style={{
-              padding: '8px 20px', fontSize: '12px', borderRadius: '8px',
-              cursor: 'pointer', background: 'rgba(255,255,255,0.06)',
-              border: '1px solid var(--border-soft)', color: 'var(--text-primary)',
-              transition: 'background-color 0.2s',
-            }}
-            onMouseEnter={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.12)'}
-            onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'rgba(255,255,255,0.06)'}
-          >
-            Documentation
-          </button>
+    <>
+      <header className="top">
+        <div className="wrap top-row">
+          <span className="brand">Aegis</span>
+          <span className="muted small">{data ? `Prices to ${fmtDate(data.asOf)}` : 'Loading prices…'}</span>
         </div>
       </header>
 
-      {/* Date & Strategy Controls Toolbar */}
-      <div className="glass-panel" style={{
-        margin: '0 16px 16px 16px', padding: '12px 24px', borderRadius: '12px',
-        display: 'flex', alignItems: 'center', gap: '18px', justifyContent: 'space-between',
-        flexWrap: 'wrap',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '16px', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <label style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 600 }}>Start Date:</label>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              style={{
-                background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-soft)',
-                color: 'var(--text-primary)', borderRadius: '6px', padding: '4px 8px', fontSize: '12px',
-              }}
-            />
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <label style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 600 }}>End Date:</label>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              style={{
-                background: 'rgba(255,255,255,0.03)', border: '1px solid var(--border-soft)',
-                color: 'var(--text-primary)', borderRadius: '6px', padding: '4px 8px', fontSize: '12px',
-              }}
-            />
-          </div>
-          <button
-            onClick={() => runBacktest()}
-            disabled={loading}
-            className="btn btn-primary"
-            style={{
-              padding: '6px 16px', fontSize: '12px', borderRadius: '6px',
-              cursor: loading ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {loading ? 'Running...' : 'Run Simulation'}
-          </button>
-        </div>
-
-        {/* Mode Switches */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
-          <button
-            onClick={() => toggleTop10Neutral(!useTop10Neutral)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '6px',
-              padding: '6px 12px', fontSize: '11px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer',
-              background: useTop10Neutral ? 'rgba(16, 185, 129, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-              border: useTop10Neutral ? '1px solid rgba(16, 185, 129, 0.45)' : '1px solid var(--border-soft)',
-              color: useTop10Neutral ? '#34d399' : 'var(--text-secondary)',
-            }}
-            title="Switch between Dynamic US Top 10 Equal-Weight (Monthly) and Classic Neutral (50% SPY, 30% XLK, 10% DBC, 10% XLF)"
-          >
-            <Layers size={14} />
-            Neutral: {useTop10Neutral ? 'US Top 10 (10% Equal · Monthly)' : 'Classic (SPY/XLK/DBC/XLF)'}
-          </button>
-
-          <button
-            onClick={() => toggleBearShield(!useBearShield)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '6px',
-              padding: '6px 12px', fontSize: '11px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer',
-              background: useBearShield ? 'rgba(99, 102, 241, 0.18)' : 'rgba(255, 255, 255, 0.05)',
-              border: useBearShield ? '1px solid rgba(99, 102, 241, 0.5)' : '1px solid var(--border-soft)',
-              color: useBearShield ? '#818cf8' : 'var(--text-secondary)',
-            }}
-            title="Pure USI Fear-Index Bear Market (2008, 2020) & Correction (2022) Shield"
-          >
-            <ShieldAlert size={14} />
-            Bear Shield (USI): {useBearShield ? 'ON' : 'OFF'}
-          </button>
-
-          <button
-            onClick={() => toggleAggroDips(!useAggroDips)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: '6px',
-              padding: '6px 12px', fontSize: '11px', fontWeight: 700, borderRadius: '8px', cursor: 'pointer',
-              background: useAggroDips ? 'rgba(245, 158, 11, 0.15)' : 'rgba(255, 255, 255, 0.05)',
-              border: useAggroDips ? '1px solid rgba(245, 158, 11, 0.45)' : '1px solid var(--border-soft)',
-              color: useAggroDips ? '#fbbf24' : 'var(--text-secondary)',
-            }}
-            title="High-beta TQQQ/XLK/QQQ dip ladder vs Classic dip ladder"
-          >
-            Dip Ladder: {useAggroDips ? 'Aggressive (TQQQ/XLK)' : 'Classic'}
-          </button>
-        </div>
-      </div>
-
-      {/* Body */}
-      <main style={{ flex: 1, padding: '0 16px 32px', display: 'flex', flexDirection: 'column', gap: '24px' }}>
-
-        {error && (
-          <div className="glass-panel" style={{
-            background: 'var(--danger-bg)', border: '1px solid var(--danger-border)',
-            display: 'flex', gap: '12px', alignItems: 'flex-start',
-          }}>
-            <AlertCircle style={{ color: 'var(--danger)', flexShrink: 0, marginTop: 2 }} />
-            <div>
-              <h4 style={{ color: '#fca5a5', fontWeight: 700, fontSize: 15 }}>Simulation Failed</h4>
-              <p style={{ fontSize: 13, color: '#fecdd3', marginTop: 4 }}>{error}</p>
+      <main className="wrap">
+        <section className="intro">
+          <h1>Stress-regime rotation vs the S&amp;P 500</h1>
+          <p className="lead">
+            A rules-based strategy that holds a core equity portfolio, adds leverage in stages as market stress (the USI index)
+            rises, and moves to T-bills and gold in structural bear markets. Backtested on total-return prices with next-day execution.
+          </p>
+          <div className="controls">
+            <div className="seg" role="group" aria-label="Dip-buying ladder">
+              <button className={ladder === 'aggressive' ? 'on' : ''} onClick={() => setLadder('aggressive')}>Aggressive ladder</button>
+              <button className={ladder === 'classic' ? 'on' : ''} onClick={() => setLadder('classic')}>Classic ladder</button>
             </div>
+            <Toggle label="Top-10 stock sleeve in Neutral" checked={top10} onChange={setTop10} hint="Neutral holds the 10 highest-scoring US mega caps (size × momentum × trend), equal weight, reviewed monthly" />
+            <Toggle label="Bear Shield" checked={bearShield} onChange={setBearShield} hint="Move to 75% T-bills / 25% gold in structural bear markets" />
           </div>
-        )}
+        </section>
 
-        {loading ? (
-          <div className="glass-panel" style={{
-            height: 500, display: 'flex', flexDirection: 'column',
-            justifyContent: 'center', alignItems: 'center', gap: 16,
-          }}>
-            <div style={{
-              width: 40, height: 40,
-              border: '3px solid rgba(255,255,255,0.05)',
-              borderTopColor: 'var(--primary)',
-              borderRadius: '50%', animation: 'spin 1s linear infinite',
-            }} />
-            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-            <div style={{ fontSize: 15, color: 'var(--text-secondary)' }}>
-              Loading decision support engine data…
-            </div>
-          </div>
-        ) : results ? (
-          <div className="animate-fade-in" style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-
-            {/* Strategy Explanation & Active Top 10 US Companies Card */}
-            <div className="glass-panel" style={{ padding: '16px 20px', lineHeight: 1.5, display: 'flex', flexDirection: 'column', gap: '10px' }}>
-              <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: 0 }}>
-                Aegis is an algorithmic decision engine designed to exploit market inefficiencies. By continuously scanning market internals and the Velocity/Persistence of the Fear Index (USI), the algorithm distinguishes momentary dips from systemic Bear Markets (2008, 2020) and prolonged Corrections (2022)—shielding capital during freefalls and rotating aggressively into leveraged recovery at capitulation bottoms.
-              </p>
-              {useTop10Neutral && results.latestTop10 && results.latestTop10.length > 0 && (
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap',
-                  paddingTop: '8px', borderTop: '1px solid var(--border-soft)', fontSize: '11px'
-                }}>
-                  <span style={{ color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>
-                    Neutral Portfolio (US Top 10 · 10% Equal Weight · {results.top10RebalanceCount ?? 0} Monthly Roster Updates):
-                  </span>
-                  {results.latestTop10.map(t => (
-                    <span
-                      key={t}
-                      style={{
-                        padding: '2px 8px', borderRadius: '6px', fontWeight: 700,
-                        background: 'rgba(99, 102, 241, 0.14)', color: '#a5b4fc',
-                        border: '1px solid rgba(99, 102, 241, 0.3)'
-                      }}
-                    >
-                      {t} (10%)
-                    </span>
-                  ))}
+        {!result ? (
+          <p className="muted">Running backtest…</p>
+        ) : (
+          <>
+            <section className="grid2">
+              <div className="card now">
+                <div className="muted small">Current signal · {fmtDate(result.endDate)}</div>
+                <div className="regime">{REGIME_NAMES[result.currentPortfolioId] ?? result.currentPortfolioId}</div>
+                <div className="small">
+                  USI {lastPoint?.usi.toFixed(0)} · holds{' '}
+                  {result.currentHoldings.map(a => `${a.ticker} ${Math.round(a.weight)}%`).join(', ')}
                 </div>
-              )}
-            </div>
-
-            {/* USI Chart + Equity Curve */}
-            <TradingViewChart
-              equityCurve={results.equityCurve}
-              spyData={cache[CONFIG.benchmarkTicker] || []}
-              trades={results.trades}
-              rules={RULES}
-              benchmarkTicker={CONFIG.benchmarkTicker}
-            />
-
-            {/* Full analytics dashboard */}
-            <AnalyticsPanel
-              results={results}
-              fullRunResults={fullRunResults || (startDate === '2006-01-03' ? results : null)}
-              initialCapital={CONFIG.initialCapital}
-              onSelectYear={handleSelectYear}
-              onResetRange={handleResetRange}
-              selectedYear={startDate.slice(0, 4) === endDate.slice(0, 4) ? Number(startDate.slice(0, 4)) : null}
-            />
-
-            {/* Trade log */}
-            <div className="glass-panel" style={{ padding: '16px' }}>
-              <h3 style={{ fontSize: 13, fontWeight: 700, color: 'var(--primary)', textTransform: 'uppercase', letterSpacing: '0.1em', borderBottom: '1px solid var(--border-soft)', paddingBottom: 6, marginBottom: 12 }}>
-                Rotation Decision Log — {results.trades.length} Records
-              </h3>
-              <TradeLogTable trades={results.trades} />
-            </div>
-
-          </div>
-        ) : null}
-
-      </main>
-
-      {/* Documentation Modal */}
-      {showDoc && (
-        <div style={{
-          position: 'fixed', top: 0, left: 0, width: '100vw', height: '100vh',
-          backgroundColor: 'rgba(15, 23, 42, 0.75)', backdropFilter: 'blur(8px)',
-          zIndex: 9999, display: 'flex', justifyContent: 'center', alignItems: 'center',
-          padding: '24px', boxSizing: 'border-box'
-        }}>
-          <div className="glass-panel" style={{
-            maxWidth: '620px', width: '100%', padding: '28px', borderRadius: '16px',
-            position: 'relative', border: '1px solid rgba(255, 255, 255, 0.1)',
-            background: 'rgba(21, 28, 45, 0.95)', boxShadow: '0 20px 50px rgba(0,0,0,0.5)',
-            display: 'flex', flexDirection: 'column', gap: '16px'
-          }}>
-            <h2 style={{ fontSize: '20px', fontWeight: 800, color: 'var(--primary)', margin: 0, borderBottom: '1px solid var(--border-soft)', paddingBottom: '10px' }}>
-              Aegis Algorithmic Framework
-            </h2>
-            <div style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.6, display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              <p style={{ margin: 0 }}>
-                Aegis utilizes a quantitative, structural asset rotation methodology designed to exploit systematic periods of market stress while protecting capital during prolonged Bear Markets and Corrections.
-              </p>
-              <div>
-                <strong style={{ color: 'var(--text-primary)', display: 'block', marginBottom: '4px' }}>Core Mechanisms:</strong>
-                <ul style={{ margin: 0, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <li>
-                    <strong style={{ color: 'var(--text-primary)' }}>Dynamic US Top 10 Neutral Baseline:</strong> At the beginning of each month, the engine ranks the largest US companies by Market Cap and allocates 10% equal weight to the Top 10 whenever the roster changes.
-                  </li>
-                  <li>
-                    <strong style={{ color: 'var(--text-primary)' }}>Pure-USI Bear Market & Correction Shield:</strong> Distinguishes momentary dips from systemic crashes (2008, 2020) and multi-wave corrections (2022) using Velocity Shocks (<code>SMA5(USI) &gt; 2.2×SMA20(USI)</code>) and Chronic Fear Persistence (<code>SMA30(USI) ≥ 230</code> with expanding <code>SMA5 &gt; SMA20</code>), rotating into 60% BIL + 40% GLD.
-                  </li>
-                  <li>
-                    <strong style={{ color: 'var(--text-primary)' }}>Capitulation Exhaustion V-Bottoms:</strong> Waits for extreme panic peaks to cool for 2 consecutive days below <code>0.80×SMA5(USI)</code> before deploying maximum leverage (<code>75% TQQQ, 25% XLK</code>).
-                  </li>
-                  <li>
-                    <strong style={{ color: 'var(--text-primary)' }}>Friction Dampeners:</strong> Implements time-lock parameters to prevent premature asset reallocation and stabilize performance during high-volatility regimes.
-                  </li>
-                </ul>
               </div>
-            </div>
-            <button
-              onClick={() => setShowDoc(false)}
-              className="btn btn-primary"
-              style={{
-                alignSelf: 'flex-end', padding: '8px 24px', fontSize: '12px', borderRadius: '6px',
-                cursor: 'pointer', marginTop: '12px'
-              }}
-            >
-              Dismiss
-            </button>
-          </div>
-        </div>
-      )}
+              <div className="card">
+                <table className="ratios">
+                  <thead>
+                    <tr><th></th><th className="r">CAGR</th><th className="r">Volatility</th><th className="r">Sharpe</th><th className="r">Max drawdown</th></tr>
+                  </thead>
+                  <tbody>
+                    <RatioRow label="Strategy" r={result.metrics.strategy} />
+                    <RatioRow label="S&P 500 (SPY, total return)" r={result.metrics.benchmark} />
+                    {noTop10 && <RatioRow label="Strategy without Top-10 sleeve" r={noTop10.metrics.strategy} muted />}
+                  </tbody>
+                </table>
+                <p className="muted small note">
+                  {fmtDate(result.startDate)} – {fmtDate(result.endDate)} ({result.metrics.years.toFixed(1)} years) · Sharpe vs T-bills ·{' '}
+                  {result.metrics.rotationsPerYear.toFixed(1)} rotations a year · 0.1% cost per trade
+                </p>
+              </div>
+            </section>
 
-      <footer style={{
-        padding: '16px', fontSize: 11, color: 'var(--text-muted)',
-        textAlign: 'center', borderTop: '1px solid var(--border-soft)',
-      }}>
-        Personal Decision Support Panel · Local backtester logic
-      </footer>
-    </div>
+            <section>
+              <h2>Growth of $10,000</h2>
+              <div className="card chart-card"><EquityChart curve={result.equityCurve} /></div>
+              <div className="legend small muted">
+                <span><i style={{ background: 'var(--accent)' }} />Strategy</span>
+                <span><i style={{ background: 'var(--muted)' }} />S&amp;P 500</span>
+                <span>Log scale · lower panel: drawdown from peak</span>
+              </div>
+            </section>
+
+            <section>
+              <h2>Every calendar year</h2>
+              <p className="muted small">
+                All years come from one continuous run with the same rules, costs and total-return prices, so each row is directly comparable.
+                {yearSummary && ` Beat the S&P 500 in ${yearSummary.beat} of ${yearSummary.total} full years; median excess ${signed(yearSummary.median)}.`}
+              </p>
+              <div className="card table-wrap">
+                <table className="years">
+                  <thead>
+                    <tr>
+                      <th>Year</th><th className="r">Strategy</th><th className="r">S&amp;P 500</th><th className="r">Excess</th>
+                      <th className="r">Max DD</th><th className="r">S&amp;P max DD</th><th className="r">Days in Bear Shield</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {result.yearly.map(y => (
+                      <tr key={y.year} className={y.partial ? 'partial' : ''}>
+                        <td>{y.year}{y.partial && <span className="muted small"> YTD</span>}</td>
+                        <td className={`r ${tone(y.strategyReturn)}`}>{signed(y.strategyReturn)}</td>
+                        <td className={`r ${tone(y.benchmarkReturn)}`}>{signed(y.benchmarkReturn)}</td>
+                        <td className={`r strong ${tone(y.excess)}`}>{signed(y.excess)}</td>
+                        <td className="r">{pct(-y.strategyMaxDD, 0).replace('-', '−')}</td>
+                        <td className="r muted">{pct(-y.benchmarkMaxDD, 0).replace('-', '−')}</td>
+                        <td className="r muted">{y.defensiveDays > 0 ? pct(y.defensiveDays, 0) : '–'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+
+            <section>
+              <details className="card log">
+                <summary>Rotation log ({result.trades.length})</summary>
+                <table>
+                  <thead><tr><th>Signal</th><th>Executed</th><th>From → to</th><th>Why</th></tr></thead>
+                  <tbody>
+                    {[...result.trades].reverse().map((t, i) => (
+                      <tr key={i}>
+                        <td className="nowrap">{t.signalDate}</td>
+                        <td className="nowrap muted">{t.date}</td>
+                        <td className="nowrap">{REGIME_NAMES[t.fromPortfolio ?? ''] ?? '–'} → {REGIME_NAMES[t.toPortfolio]}</td>
+                        <td className="muted">{t.reason}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </details>
+            </section>
+
+            <section className="method">
+              <h2>How this is tested, and what to watch for</h2>
+              <ul>
+                <li><b>Prices</b> are total return (dividends reinvested) for every holding and for the benchmark, so T-bills earn their yield and SPY includes dividends.</li>
+                <li><b>No look-ahead in execution:</b> signals use the day's close and are traded at the next day's close, with 0.1% cost on turnover.</li>
+                <li><b>No simulated data.</b> The test starts in {result.startDate.slice(0, 4)}, the first full year in which every fund the strategy can hold (including TQQQ, launched Feb 2010) has real prices.</li>
+                <li><b>Survivorship bias in the Top-10 sleeve:</b> stocks are chosen from today's mega caps, and 2006–2012 leaders that later collapsed are not in the list. The muted row above shows the strategy without that sleeve.</li>
+                <li><b>In-sample rules:</b> the USI thresholds and Bear Shield triggers were tuned on this same history, so expect live results to be weaker than the backtest.</li>
+              </ul>
+              {data && <p className="muted small">Data: {data.source}. Refreshed weekly. Not investment advice.</p>}
+            </section>
+          </>
+        )}
+      </main>
+    </>
   );
 }

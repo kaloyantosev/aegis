@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.vercel
+*.tsbuildinfo
+__pycache__/
+graphify-out/

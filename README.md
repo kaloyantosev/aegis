@@ -1,32 +1,37 @@
-# React + TypeScript + Vite
+# Aegis: stress-regime rotation backtest
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+A rules-based US equity strategy, backtested against the S&P 500:
 
-Currently, two official plugins are available:
+- **Neutral:** the 10 highest-scoring US mega caps (size × momentum × trend), equal weight, reviewed monthly. With the sleeve switched off, an ETF mix (SPY/XLK/DBC/XLF).
+- **Buy → Extreme Buy:** as the USI stress index rises, add Nasdaq and leveraged Nasdaq (TQQQ) in stages.
+- **Bear Shield:** 75% T-bills (BIL) / 25% gold (GLD) in structural bear markets, exiting on capitulation or normalisation.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+The site shows four ratios for the strategy and for SPY (CAGR, volatility, Sharpe vs T-bills, max drawdown), growth of $10,000, every calendar year side by side, and the rotation log.
 
-## React Compiler
+## How it is tested
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Total-return prices** (dividends reinvested) for every holding and the benchmark.
+- **Next-day execution:** signals use the day's close and trade at the next close, with 0.1% cost on turnover.
+- **Real data only:** the test starts in the first full year in which every fund it can hold has real prices (2011, because TQQQ launched in February 2010). No synthetic back-fill.
+- **One continuous run:** yearly figures are cut from the same equity curve, so every year is computed the same way.
+- **Robustness row:** the strategy without the Top-10 sleeve. That sleeve is chosen from today's mega caps, so it has survivorship bias.
 
-## Expanding the Oxlint configuration
+The USI thresholds and Bear Shield triggers were tuned on this same history. Treat the backtest as in-sample.
 
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
+## Data
 
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
+`public/data/prices.json` holds dividend- and split-adjusted daily closes from Yahoo Finance (via `yfinance`). A GitHub Action refreshes it every week; to refresh by hand:
+
+```bash
+pip install yfinance pandas
+python scripts/update_data.py
 ```
 
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+## Develop
+
+```bash
+npm install
+npm run dev
+```
+
+Not investment advice.

@@ -1,18 +1,16 @@
 {
-  "name": "portfolio-rotator-backtester",
+  "name": "aegis",
   "private": true,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint",
     "preview": "vite preview",
-    "update-data": "node scripts/updateHistoricalData.js"
+    "update-data": "python scripts/update_data.py"
   },
   "dependencies": {
     "lightweight-charts": "^5.2.0",
-    "lucide-react": "^1.24.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },

@@ -39,7 +39,7 @@ export function TriggersChart({ curve, trades, syncHub }: { curve: EquityPoint[]
     });
     const usi = chart.addSeries(AreaSeries, {
       lineColor: '#d97706', topColor: 'rgba(217,119,6,0.28)', bottomColor: 'rgba(217,119,6,0.02)', lineWidth: 1,
-      title: 'USI', priceLineVisible: false,
+      title: 'Stress', priceLineVisible: false,
       priceFormat: { type: 'custom', minMove: 1, formatter: (v: number) => v.toFixed(0) },
     });
     const usiData = curve.map(p => ({ time: p.date as Time, value: p.usi }));

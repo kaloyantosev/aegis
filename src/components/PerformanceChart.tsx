@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  AreaSeries,
   ColorType,
   LineSeries,
   PriceScaleMode,
@@ -15,7 +14,7 @@ import type { EquityPoint } from '../types';
 
 export const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
-export const PRICE_AXIS_MIN_WIDTH = 68;
+export const PRICE_AXIS_MIN_WIDTH = 86;
 
 export const baseChartOptions = () => ({
   autoSize: true,
@@ -23,13 +22,8 @@ export const baseChartOptions = () => ({
     background: { type: ColorType.Solid, color: 'transparent' },
     textColor: css('--muted'),
     fontFamily: 'inherit',
-    fontSize: 11,
+    fontSize: 14,
     attributionLogo: false,
-    panes: {
-      enableResize: true,
-      separatorColor: css('--line'),
-      separatorHoverColor: css('--accent'),
-    },
   },
   grid: { vertLines: { visible: false }, horzLines: { color: css('--line') } },
   timeScale: { borderVisible: false, minBarSpacing: 0.01, rightOffset: 4 },
@@ -123,9 +117,8 @@ const money = {
   minMove: 1,
   formatter: (v: number) => (v >= 1e6 ? `$${(v / 1e6).toFixed(2)}M` : v >= 1e5 ? `$${Math.round(v / 1000)}k` : `$${(v / 1000).toFixed(1)}k`),
 };
-const percent = { type: 'custom' as const, minMove: 0.1, formatter: (v: number) => `${v.toFixed(0)}%` };
 
-/** Growth of $10,000 for the selected period, with drawdown from peak underneath. */
+/** Growth of $10,000 for the selected period. */
 export function PerformanceChart({ curve, log, syncHub }: { curve: EquityPoint[]; log: boolean; syncHub?: ChartSyncHub }) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -151,20 +144,6 @@ export function PerformanceChart({ curve, log, syncHub }: { curve: EquityPoint[]
     const stratData = curve.map(p => ({ time: p.date as Time, value: p.strategy }));
     strat.setData(stratData);
     bench.setData(curve.map(p => ({ time: p.date as Time, value: p.benchmark })));
-
-    const dd = (key: 'strategy' | 'benchmark') => {
-      let peak = 0;
-      return curve.map(p => { peak = Math.max(peak, p[key]); return { time: p.date as Time, value: (p[key] / peak - 1) * 100 }; });
-    };
-    chart.addSeries(AreaSeries, {
-      lineColor: css('--down'), topColor: 'rgba(0,0,0,0)', bottomColor: css('--down-soft'), lineWidth: 1,
-      priceLineVisible: false, lastValueVisible: false, priceFormat: percent,
-    }, 1).setData(dd('strategy'));
-    chart.addSeries(LineSeries, {
-      color: css('--muted'), lineWidth: 1, priceLineVisible: false, lastValueVisible: false, priceFormat: percent,
-    }, 1).setData(dd('benchmark'));
-    chart.panes()[1]?.setHeight(110);
-    chart.priceScale('right', 1).applyOptions({ mode: PriceScaleMode.Normal, autoScale: true, minimumWidth: PRICE_AXIS_MIN_WIDTH }); // drawdowns are negative: never log
 
     const valueByTime = new Map<Time, number>();
     for (const pt of stratData) valueByTime.set(pt.time, pt.value);
@@ -217,7 +196,6 @@ export function PerformanceChart({ curve, log, syncHub }: { curve: EquityPoint[]
         fitting = true;
         userInteracted = false;
         chart.priceScale('right', 0).applyOptions({ autoScale: true });
-        chart.priceScale('right', 1).applyOptions({ autoScale: true });
         chart.timeScale().fitContent();
         setIsZoomed(false);
         requestAnimationFrame(() => { fitting = false; });
@@ -268,7 +246,6 @@ export function PerformanceChart({ curve, log, syncHub }: { curve: EquityPoint[]
     const chart = chartRef.current;
     if (!chart) return;
     chart.priceScale('right', 0).applyOptions({ autoScale: true });
-    chart.priceScale('right', 1).applyOptions({ autoScale: true });
     chart.timeScale().fitContent();
     setIsZoomed(false);
     syncHub?.broadcastReset(chart);

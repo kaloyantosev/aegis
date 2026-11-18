@@ -197,17 +197,17 @@ export default function App() {
             <section className="panel">
               <h3>Performance: Aegis vs SPY buy &amp; hold <span className="muted small">· {periodLabel} · $10,000 start</span></h3>
               <PerformanceChart curve={view.curve} log={view.stats.years > 2} syncHub={chartSync} />
-              <div className="legend small muted">
+              <div className="legend">
                 <span><i style={{ background: 'var(--accent)' }} />Aegis</span>
                 <span><i style={{ background: 'var(--muted)' }} />SPY (total return)</span>
-                <span>Lower panel: drawdown from peak{view.stats.years > 2 ? ' · log scale' : ''}</span>
+                {view.stats.years > 2 && <span className="muted">Log scale</span>}
               </div>
             </section>
 
             <section className="panel">
-              <h3>Rotational triggers <span className="muted small">· USI stress index, log scale</span></h3>
+              <h3>Rotational triggers <span className="muted small">· Stress index, log scale</span></h3>
               <TriggersChart curve={view.curve} trades={result!.trades} syncHub={chartSync} />
-              <div className="legend small muted">
+              <div className="legend">
                 {['buy', 'strong-buy', 'heavy-buy', 'extreme-buy', 'neutral', 'bear-shield'].map(id => (
                   <span key={id}><i style={{ background: REGIME_COLORS[id] }} />{id === 'neutral' ? 'Back to Neutral' : REGIME_NAMES[id]}</span>
                 ))}

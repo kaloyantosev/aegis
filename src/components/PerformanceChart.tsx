@@ -107,25 +107,26 @@ export function PerformanceChart({ curve, log }: { curve: EquityPoint[]; log: bo
     chart.panes()[1]?.setHeight(110);
     chart.priceScale('right', 1).applyOptions({ mode: PriceScaleMode.Normal, autoScale: true }); // drawdowns are negative: never log
 
+    let didInitialFit = false;
     let userInteracted = false;
     let fitting = false;
     const fitInitial = () => {
       if (userInteracted || el.clientWidth <= 0) return;
       fitting = true;
       chart.timeScale().fitContent();
+      didInitialFit = true;
       requestAnimationFrame(() => { fitting = false; });
     };
 
     const unsubRange = () => {
       const range = chart.timeScale().getVisibleLogicalRange();
-      if (!fitting && range) {
-        const span = range.to - range.from;
-        if (span < curve.length - 3 || range.from > 1.5 || range.to < curve.length - 2) {
-          userInteracted = true;
-          setIsZoomed(true);
-        } else {
-          setIsZoomed(false);
-        }
+      if (!didInitialFit || fitting || !range) return;
+      const span = range.to - range.from;
+      if (span < curve.length - 3 || range.from > 1.5 || range.to < curve.length - 2) {
+        userInteracted = true;
+        setIsZoomed(true);
+      } else {
+        setIsZoomed(false);
       }
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(unsubRange);

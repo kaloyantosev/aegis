@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { backtester } from './services/backtester';
 import { periodStats, rangeIndex, rebased, yearlyCards } from './services/stats';
 import { loadPrices, refreshPricesOnDemand, type LoadedData } from './data';
-import { AGGRESSIVE, CLASSIC, REGIME_COLORS, REGIME_NAMES } from './portfolios';
+import { AGGRESSIVE, REGIME_COLORS, REGIME_NAMES } from './portfolios';
 import { ChartSyncHub, PerformanceChart } from './components/PerformanceChart';
 import { TriggersChart } from './components/TriggersChart';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
@@ -14,9 +14,8 @@ const BASE = { initialCapital: 10000, transactionFee: 0.1, benchmarkTicker: 'SPY
 export default function App() {
   const [data, setData] = useState<LoadedData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [aggressive, setAggressive] = useState(true);
-  const [top10, setTop10] = useState(true);
-  const [bearShield, setBearShield] = useState(true);
+  const top10 = true;
+  const bearShield = true;
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [noTop10, setNoTop10] = useState<BacktestResult | null>(null);
   const [running, setRunning] = useState(false);
@@ -61,7 +60,7 @@ export default function App() {
     setRunning(true);
     const id = setTimeout(() => {
       try {
-        const portfolios = aggressive ? AGGRESSIVE : CLASSIC;
+        const portfolios = AGGRESSIVE;
         const cfg = { ...BASE, useTop10Neutral: top10, useBearShield: bearShield };
         const r = backtester.run(cfg, portfolios, data.cache);
         setResult(r);
@@ -78,7 +77,7 @@ export default function App() {
       }
     }, 20);
     return () => clearTimeout(id);
-  }, [data, aggressive, top10, bearShield]);
+  }, [data]);
 
   const view = useMemo(() => {
     if (!result) return null;
@@ -153,20 +152,6 @@ export default function App() {
           <label>End <input type="date" value={endInput} min={result?.startDate} max={result?.endDate} onChange={e => setEndInput(e.target.value)} /></label>
           <button className="btn btn-primary" onClick={applyRange} disabled={!result}>Apply range</button>
           <span className="muted small">Viewing: <b>{periodLabel}</b></span>
-        </div>
-        <div className="toolbar-group">
-          <button className={`switch ${top10 ? 'on green' : ''}`} onClick={() => setTop10(v => !v)}
-            title="Neutral holds the 10 highest-scoring US mega caps (equal weight, monthly) instead of 50% SPY / 30% XLK / 10% DBC / 10% XLF">
-            Neutral: {top10 ? 'US Top 10' : 'ETF mix'}
-          </button>
-          <button className={`switch ${bearShield ? 'on blue' : ''}`} onClick={() => setBearShield(v => !v)}
-            title="Move to 75% T-bills / 25% gold in structural bear markets">
-            Bear Shield: {bearShield ? 'On' : 'Off'}
-          </button>
-          <button className={`switch ${aggressive ? 'on amber' : ''}`} onClick={() => setAggressive(v => !v)}
-            title="Aggressive ladder adds QQQ and leveraged TQQQ as stress rises; Classic uses sector ETFs">
-            Dip ladder: {aggressive ? 'Aggressive (TQQQ)' : 'Classic'}
-          </button>
         </div>
       </div>
 

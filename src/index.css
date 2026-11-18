@@ -90,8 +90,12 @@ input[type="date"] { font: inherit; font-size: 13px; padding: 4px 8px; border-ra
 
 /* Charts */
 .chart { width: 100%; }
-.chart-perf { height: 400px; }
+.chart-perf { height: 400px; cursor: crosshair; }
 .chart-usi { height: 300px; }
+.perf-chart-wrap { display: flex; flex-direction: column; gap: 6px; }
+.perf-controls { display: flex; align-items: center; justify-content: space-between; gap: 8px 12px; flex-wrap: wrap; }
+.perf-btn-group { display: inline-flex; align-items: center; gap: 6px; }
+.btn-xs { font-size: 12px; padding: 3px 9px; border-radius: 6px; line-height: 1.3; }
 .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 8px; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
 .legend i { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }

@@ -6,10 +6,16 @@ import {
   PriceScaleMode,
   createChart,
   type IChartApi,
+  type ISeriesApi,
+  type LogicalRange,
+  type SeriesType,
+  type Time,
 } from 'lightweight-charts';
 import type { EquityPoint } from '../types';
 
 export const css = (name: string) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+
+export const PRICE_AXIS_MIN_WIDTH = 68;
 
 export const baseChartOptions = () => ({
   autoSize: true,
@@ -19,22 +25,97 @@ export const baseChartOptions = () => ({
     fontFamily: 'inherit',
     fontSize: 11,
     attributionLogo: false,
-    panes: { separatorColor: css('--line') },
+    panes: {
+      enableResize: true,
+      separatorColor: css('--line'),
+      separatorHoverColor: css('--accent'),
+    },
   },
   grid: { vertLines: { visible: false }, horzLines: { color: css('--line') } },
-  timeScale: { borderVisible: false, minBarSpacing: 0.01 },
+  timeScale: { borderVisible: false, minBarSpacing: 0.01, rightOffset: 4 },
   crosshair: { mode: 0 },
-  handleScroll: false,
-  handleScale: false,
+  handleScroll: {
+    mouseWheel: true,
+    pressedMouseMove: true,
+    horzTouchDrag: true,
+    vertTouchDrag: true,
+  },
+  handleScale: {
+    mouseWheel: true,
+    pinch: true,
+    axisPressedMouseMove: { time: true, price: true },
+    axisDoubleClickReset: { time: true, price: true },
+  },
 });
 
-/** Fit the time axis once the auto-sized container has a width, and on resize. */
-export function keepFitted(chart: { timeScale(): { fitContent(): void } }, el: HTMLElement) {
-  const fit = () => chart.timeScale().fitContent();
-  const ro = new ResizeObserver(() => requestAnimationFrame(fit));
-  ro.observe(el);
-  requestAnimationFrame(fit);
-  return () => ro.disconnect();
+export interface SyncParticipant {
+  chart: IChartApi;
+  series: ISeriesApi<SeriesType, Time>;
+  valueByTime: Map<Time, number>;
+  applyExternalRange: (range: LogicalRange) => void;
+  applyExternalReset: () => void;
+}
+
+/** Coordinates time-axis zoom/pan, reset, and crosshair position across multiple charts. */
+export class ChartSyncHub {
+  private participants = new Set<SyncParticipant>();
+  private syncingRange = false;
+  private syncingCrosshair = false;
+
+  register(p: SyncParticipant) {
+    this.participants.add(p);
+    return () => {
+      this.participants.delete(p);
+    };
+  }
+
+  broadcastRange(sourceChart: IChartApi, range: LogicalRange) {
+    if (this.syncingRange) return;
+    this.syncingRange = true;
+    try {
+      for (const p of this.participants) {
+        if (p.chart !== sourceChart) {
+          p.applyExternalRange(range);
+        }
+      }
+    } finally {
+      this.syncingRange = false;
+    }
+  }
+
+  broadcastReset(sourceChart: IChartApi) {
+    if (this.syncingRange) return;
+    this.syncingRange = true;
+    try {
+      for (const p of this.participants) {
+        if (p.chart !== sourceChart) {
+          p.applyExternalReset();
+        }
+      }
+    } finally {
+      this.syncingRange = false;
+    }
+  }
+
+  broadcastCrosshair(sourceChart: IChartApi, time: Time | undefined) {
+    if (this.syncingCrosshair) return;
+    this.syncingCrosshair = true;
+    try {
+      for (const p of this.participants) {
+        if (p.chart === sourceChart) continue;
+        if (time !== undefined) {
+          const val = p.valueByTime.get(time);
+          if (val !== undefined) {
+            p.chart.setCrosshairPosition(val, time, p.series);
+            continue;
+          }
+        }
+        p.chart.clearCrosshairPosition();
+      }
+    } finally {
+      this.syncingCrosshair = false;
+    }
+  }
 }
 
 const money = {
@@ -45,7 +126,7 @@ const money = {
 const percent = { type: 'custom' as const, minMove: 0.1, formatter: (v: number) => `${v.toFixed(0)}%` };
 
 /** Growth of $10,000 for the selected period, with drawdown from peak underneath. */
-export function PerformanceChart({ curve, log }: { curve: EquityPoint[]; log: boolean }) {
+export function PerformanceChart({ curve, log, syncHub }: { curve: EquityPoint[]; log: boolean; syncHub?: ChartSyncHub }) {
   const ref = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const [isZoomed, setIsZoomed] = useState(false);
@@ -56,46 +137,24 @@ export function PerformanceChart({ curve, log }: { curve: EquityPoint[]; log: bo
     const base = baseChartOptions();
     const chart = createChart(el, {
       ...base,
-      layout: {
-        ...base.layout,
-        panes: {
-          enableResize: true,
-          separatorColor: css('--line'),
-          separatorHoverColor: css('--accent'),
-        },
-      },
-      timeScale: {
-        ...base.timeScale,
-        rightOffset: 4,
-      },
       rightPriceScale: {
         borderVisible: false,
         autoScale: true,
+        minimumWidth: PRICE_AXIS_MIN_WIDTH,
         mode: log ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
-      },
-      handleScroll: {
-        mouseWheel: true,
-        pressedMouseMove: true,
-        horzTouchDrag: true,
-        vertTouchDrag: true,
-      },
-      handleScale: {
-        mouseWheel: true,
-        pinch: true,
-        axisPressedMouseMove: { time: true, price: true },
-        axisDoubleClickReset: { time: true, price: true },
       },
     });
     chartRef.current = chart;
 
     const strat = chart.addSeries(LineSeries, { color: css('--accent'), lineWidth: 2, title: 'Aegis', priceLineVisible: false, priceFormat: money });
     const bench = chart.addSeries(LineSeries, { color: css('--muted'), lineWidth: 1, title: 'SPY', priceLineVisible: false, priceFormat: money });
-    strat.setData(curve.map(p => ({ time: p.date, value: p.strategy })));
-    bench.setData(curve.map(p => ({ time: p.date, value: p.benchmark })));
+    const stratData = curve.map(p => ({ time: p.date as Time, value: p.strategy }));
+    strat.setData(stratData);
+    bench.setData(curve.map(p => ({ time: p.date as Time, value: p.benchmark })));
 
     const dd = (key: 'strategy' | 'benchmark') => {
       let peak = 0;
-      return curve.map(p => { peak = Math.max(peak, p[key]); return { time: p.date, value: (p[key] / peak - 1) * 100 }; });
+      return curve.map(p => { peak = Math.max(peak, p[key]); return { time: p.date as Time, value: (p[key] / peak - 1) * 100 }; });
     };
     chart.addSeries(AreaSeries, {
       lineColor: css('--down'), topColor: 'rgba(0,0,0,0)', bottomColor: css('--down-soft'), lineWidth: 1,
@@ -105,7 +164,10 @@ export function PerformanceChart({ curve, log }: { curve: EquityPoint[]; log: bo
       color: css('--muted'), lineWidth: 1, priceLineVisible: false, lastValueVisible: false, priceFormat: percent,
     }, 1).setData(dd('benchmark'));
     chart.panes()[1]?.setHeight(110);
-    chart.priceScale('right', 1).applyOptions({ mode: PriceScaleMode.Normal, autoScale: true }); // drawdowns are negative: never log
+    chart.priceScale('right', 1).applyOptions({ mode: PriceScaleMode.Normal, autoScale: true, minimumWidth: PRICE_AXIS_MIN_WIDTH }); // drawdowns are negative: never log
+
+    const valueByTime = new Map<Time, number>();
+    for (const pt of stratData) valueByTime.set(pt.time, pt.value);
 
     let didInitialFit = false;
     let userInteracted = false;
@@ -118,18 +180,49 @@ export function PerformanceChart({ curve, log }: { curve: EquityPoint[]; log: bo
       requestAnimationFrame(() => { fitting = false; });
     };
 
-    const unsubRange = () => {
-      const range = chart.timeScale().getVisibleLogicalRange();
+    const onRangeChange = (range: LogicalRange | null) => {
       if (!didInitialFit || fitting || !range) return;
       const span = range.to - range.from;
-      if (span < curve.length - 3 || range.from > 1.5 || range.to < curve.length - 2) {
+      const zoomed = span < curve.length - 3 || range.from > 1.5 || range.to < curve.length - 2;
+      if (zoomed) {
         userInteracted = true;
         setIsZoomed(true);
       } else {
         setIsZoomed(false);
       }
+      syncHub?.broadcastRange(chart, range);
     };
-    chart.timeScale().subscribeVisibleLogicalRangeChange(unsubRange);
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onRangeChange);
+
+    const onCrosshairMove = (param: { time?: Time }) => {
+      syncHub?.broadcastCrosshair(chart, param.time);
+    };
+    chart.subscribeCrosshairMove(onCrosshairMove);
+
+    const unregisterSync = syncHub?.register({
+      chart,
+      series: strat,
+      valueByTime,
+      applyExternalRange: (range) => {
+        if (!didInitialFit) return;
+        fitting = true;
+        chart.timeScale().setVisibleLogicalRange(range);
+        const span = range.to - range.from;
+        const zoomed = span < curve.length - 3 || range.from > 1.5 || range.to < curve.length - 2;
+        userInteracted = zoomed;
+        setIsZoomed(zoomed);
+        requestAnimationFrame(() => { fitting = false; });
+      },
+      applyExternalReset: () => {
+        fitting = true;
+        userInteracted = false;
+        chart.priceScale('right', 0).applyOptions({ autoScale: true });
+        chart.priceScale('right', 1).applyOptions({ autoScale: true });
+        chart.timeScale().fitContent();
+        setIsZoomed(false);
+        requestAnimationFrame(() => { fitting = false; });
+      },
+    });
 
     const ro = new ResizeObserver(() => requestAnimationFrame(fitInitial));
     ro.observe(el);
@@ -138,11 +231,13 @@ export function PerformanceChart({ curve, log }: { curve: EquityPoint[]; log: bo
 
     return () => {
       ro.disconnect();
-      chart.timeScale().unsubscribeVisibleLogicalRangeChange(unsubRange);
+      unregisterSync?.();
+      chart.unsubscribeCrosshairMove(onCrosshairMove);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRangeChange);
       chartRef.current = null;
       chart.remove();
     };
-  }, [curve, log]);
+  }, [curve, log, syncHub]);
 
   const zoomBy = (factor: number) => {
     const chart = chartRef.current;
@@ -164,7 +259,8 @@ export function PerformanceChart({ curve, log }: { curve: EquityPoint[]; log: bo
       nextTo = curve.length + 4;
       nextFrom = Math.max(-2, nextTo - nextSpan);
     }
-    ts.setVisibleLogicalRange({ from: nextFrom, to: nextTo });
+    const nextRange = { from: nextFrom, to: nextTo };
+    ts.setVisibleLogicalRange(nextRange);
     setIsZoomed(nextSpan < curve.length - 2);
   };
 
@@ -175,6 +271,7 @@ export function PerformanceChart({ curve, log }: { curve: EquityPoint[]; log: bo
     chart.priceScale('right', 1).applyOptions({ autoScale: true });
     chart.timeScale().fitContent();
     setIsZoomed(false);
+    syncHub?.broadcastReset(chart);
   };
 
   return (

@@ -3,7 +3,7 @@ import { backtester } from './services/backtester';
 import { periodStats, rangeIndex, rebased, yearlyCards } from './services/stats';
 import { loadPrices, refreshPricesOnDemand, type LoadedData } from './data';
 import { AGGRESSIVE, CLASSIC, REGIME_COLORS, REGIME_NAMES } from './portfolios';
-import { PerformanceChart } from './components/PerformanceChart';
+import { ChartSyncHub, PerformanceChart } from './components/PerformanceChart';
 import { TriggersChart } from './components/TriggersChart';
 import { AnalyticsPanel } from './components/AnalyticsPanel';
 import { RotationLog } from './components/RotationLog';
@@ -24,6 +24,7 @@ export default function App() {
   const [updateNotice, setUpdateNotice] = useState<string | null>(null);
   const [showDoc, setShowDoc] = useState(false);
   const prevEndDateRef = useRef<string>('');
+  const chartSync = useMemo(() => new ChartSyncHub(), []);
 
   // Period selection: the applied range plus the editable inputs in the toolbar.
   const [range, setRange] = useState<{ start: string; end: string } | null>(null);
@@ -195,7 +196,7 @@ export default function App() {
 
             <section className="panel">
               <h3>Performance: Aegis vs SPY buy &amp; hold <span className="muted small">· {periodLabel} · $10,000 start</span></h3>
-              <PerformanceChart curve={view.curve} log={view.stats.years > 2} />
+              <PerformanceChart curve={view.curve} log={view.stats.years > 2} syncHub={chartSync} />
               <div className="legend small muted">
                 <span><i style={{ background: 'var(--accent)' }} />Aegis</span>
                 <span><i style={{ background: 'var(--muted)' }} />SPY (total return)</span>
@@ -205,7 +206,7 @@ export default function App() {
 
             <section className="panel">
               <h3>Rotational triggers <span className="muted small">· USI stress index, log scale</span></h3>
-              <TriggersChart curve={view.curve} trades={result!.trades} />
+              <TriggersChart curve={view.curve} trades={result!.trades} syncHub={chartSync} />
               <div className="legend small muted">
                 {['buy', 'strong-buy', 'heavy-buy', 'extreme-buy', 'neutral', 'bear-shield'].map(id => (
                   <span key={id}><i style={{ background: REGIME_COLORS[id] }} />{id === 'neutral' ? 'Back to Neutral' : REGIME_NAMES[id]}</span>

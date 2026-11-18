@@ -1,7 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { backtester } from './services/backtester';
 import { periodStats, rangeIndex, rebased, yearlyCards } from './services/stats';
-import { loadPrices, type LoadedData } from './data';
+import { loadPrices, refreshPricesOnDemand, type LoadedData } from './data';
 import { AGGRESSIVE, CLASSIC, REGIME_COLORS, REGIME_NAMES } from './portfolios';
 import { PerformanceChart } from './components/PerformanceChart';
 import { TriggersChart } from './components/TriggersChart';
@@ -20,7 +20,10 @@ export default function App() {
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [noTop10, setNoTop10] = useState<BacktestResult | null>(null);
   const [running, setRunning] = useState(false);
+  const [updatingData, setUpdatingData] = useState(false);
+  const [updateNotice, setUpdateNotice] = useState<string | null>(null);
   const [showDoc, setShowDoc] = useState(false);
+  const prevEndDateRef = useRef<string>('');
 
   // Period selection: the applied range plus the editable inputs in the toolbar.
   const [range, setRange] = useState<{ start: string; end: string } | null>(null);
@@ -31,6 +34,26 @@ export default function App() {
   useEffect(() => {
     loadPrices().then(setData).catch(e => setError(String(e.message ?? e)));
   }, []);
+
+  const handleUpdateData = async () => {
+    if (!data || updatingData) return;
+    setUpdatingData(true);
+    setUpdateNotice(null);
+    setError(null);
+    try {
+      const { updated, addedDays } = await refreshPricesOnDemand(data);
+      setData(updated);
+      setUpdateNotice(
+        addedDays > 0
+          ? `+${addedDays} ${addedDays === 1 ? 'day' : 'days'} (to ${updated.asOf})`
+          : `Up to date (${updated.asOf})`,
+      );
+    } catch (e) {
+      setError(String((e as Error).message ?? e));
+    } finally {
+      setUpdatingData(false);
+    }
+  };
 
   useEffect(() => {
     if (!data) return;
@@ -43,7 +66,10 @@ export default function App() {
         setResult(r);
         setNoTop10(top10 ? backtester.run({ ...cfg, useTop10Neutral: false }, portfolios, data.cache) : null);
         setStartInput(s => s || r.startDate);
-        setEndInput(e => e || r.endDate);
+        const prevEnd = prevEndDateRef.current;
+        setEndInput(e => (!e || e === prevEnd ? r.endDate : e));
+        setRange(cur => (cur && cur.end === prevEnd ? { ...cur, end: r.endDate } : cur));
+        prevEndDateRef.current = r.endDate;
       } catch (e) {
         setError(String((e as Error).message ?? e));
       } finally {
@@ -104,7 +130,19 @@ export default function App() {
           </div>
         </div>
         <div className="header-right">
-          <span className="pill small"><span className="dot" />Data to <b>{data?.asOf ?? '…'}</b></span>
+          <span className="pill small">
+            <span className="dot" />
+            Data to <b>{data?.asOf ?? '…'}</b>
+            {updateNotice && <span className="muted" style={{ marginLeft: 4 }}>· {updateNotice}</span>}
+          </span>
+          <button
+            className="btn"
+            onClick={handleUpdateData}
+            disabled={!data || updatingData || running}
+            title="Fetch the latest market closes from Yahoo Finance on demand"
+          >
+            {updatingData ? 'Updating…' : 'Update data'}
+          </button>
           <button className="btn" onClick={() => setShowDoc(true)}>Documentation</button>
         </div>
       </header>

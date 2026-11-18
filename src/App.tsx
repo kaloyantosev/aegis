@@ -117,7 +117,6 @@ export default function App() {
 
   const neutralName = top10 ? 'Neutral (US Top 10)' : 'Neutral';
   const regimeName = (id: string) => (id === 'neutral' ? neutralName : REGIME_NAMES[id] ?? id);
-  const lastUsi = result?.equityCurve[result.equityCurve.length - 1]?.usi;
   const periodLabel = selectedYear ? String(selectedYear) : range ? `${view?.stats.from} → ${view?.stats.to}` : 'All years';
 
   return (
@@ -186,10 +185,6 @@ export default function App() {
               <div className="now">
                 <span className="now-label">Current signal ({result!.endDate}):</span>
                 <b style={{ color: REGIME_COLORS[result!.currentPortfolioId] }}>{regimeName(result!.currentPortfolioId)}</b>
-                <span className="muted">USI {lastUsi?.toFixed(0)}</span>
-                <span className="chips">
-                  {result!.currentHoldings.map(a => <span key={a.ticker} className="chip">{a.ticker} {Math.round(a.weight)}%</span>)}
-                </span>
                 {top10 && <span className="muted small">{result!.top10Updates} monthly Top-10 roster changes since 2006</span>}
               </div>
             </section>

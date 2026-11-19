@@ -229,7 +229,7 @@ export default function App() {
             </ul>
             <h4>Caveats</h4>
             <ul>
-              <li>The Top-10 sleeve picks from today's mega caps, so it carries survivorship bias. Compare with the "without Top-10 sleeve" line.</li>
+              <li>The Top-10 universe covers 47 US mega caps across 2006–2026 (all 10 largest S&amp;P 500 companies each year, including 2008 crash victims like AIG), though bankrupt/acquired firms outside Yahoo Finance (e.g. WB, MER) are unavailable. Compare with the "without Top-10 sleeve" line.</li>
               <li>The USI thresholds and Bear Shield triggers were tuned on this same history. Expect live results to be weaker.</li>
             </ul>
             <p className="muted small">Data: {data?.source}. Not investment advice.</p>

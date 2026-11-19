@@ -11,6 +11,7 @@ export const TICKERS = [
   'AAPL', 'MSFT', 'NVDA', 'AMZN', 'GOOGL', 'META', 'BRK-B', 'TSLA', 'LLY', 'AVGO',
   'JPM', 'WMT', 'XOM', 'V', 'UNH', 'MA', 'PG', 'JNJ', 'HD', 'ORCL',
   'CVX', 'BAC', 'KO', 'CSCO', 'INTC', 'IBM', 'GE', 'PFE', 'WFC', 'C', 'T',
+  'AIG', 'MO', 'PM', 'COP', 'SLB', 'MRK', 'PEP', 'HPQ', 'QCOM', 'GS', 'AXP', 'VZ', 'COST', 'DIS', 'MCD', 'ABT',
 ];
 
 const nyDateFormatter = new Intl.DateTimeFormat('en-CA', {

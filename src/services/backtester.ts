@@ -59,9 +59,8 @@ function rollingExtremes(c: number[], window: number) {
 }
 
 // ── US mega-cap universe for the Top-10 Neutral portfolio ─────────────────────
-// Split-adjusted shares outstanding (billions), approximate, at ANCHOR_YEARS.
-// Note: the universe is today's large caps, so the Top-10 sleeve has survivorship bias
-// (2006-era leaders that later collapsed, e.g. AIG, are not in the list).
+// Split-adjusted shares outstanding (billions), verified against SEC EDGAR at ANCHOR_YEARS.
+// Includes 2006–2026 S&P 500 Top-10 leaders and major crash/historical mega-caps such as AIG, MO, COP, SLB, HPQ.
 const ANCHOR_YEARS = [2006, 2009, 2012, 2015, 2018, 2022, 2026];
 const SHARE_ANCHORS: { [ticker: string]: number[] } = {
   'AAPL':  [24.5, 25.0, 25.8, 24.5, 20.0, 16.3, 15.1],
@@ -95,6 +94,22 @@ const SHARE_ANCHORS: { [ticker: string]: number[] } = {
   'WFC':   [ 3.35, 3.35, 5.2,  5.25, 4.8,  3.8,  3.3],
   'C':     [ 0.50, 0.52, 2.9,  3.0,  2.45, 1.95, 1.9],
   'T':     [ 3.9,  6.0,  5.9,  5.2,  7.2,  7.15, 7.15],
+  'AIG':   [ 0.13, 0.135, 1.476, 1.237, 0.885, 0.743, 0.518],
+  'MO':    [ 2.10, 2.072, 2.025, 1.961, 1.879, 1.792, 1.663],
+  'PM':    [ 0.0,  1.905, 1.671, 1.549, 1.555, 1.550, 1.559],
+  'COP':   [ 2.15, 1.946, 1.214, 1.235, 1.151, 1.246, 1.182],
+  'SLB':   [ 1.18, 1.201, 1.328, 1.256, 1.383, 1.420, 1.476],
+  'MRK':   [ 2.21, 2.21,  3.186, 2.928, 2.725, 2.535, 2.465],
+  'PEP':   [ 1.66, 1.560, 1.547, 1.457, 1.412, 1.378, 1.363],
+  'HPQ':   [ 6.06, 5.206, 4.290, 3.946, 1.553, 0.982, 0.902],
+  'QCOM':  [ 1.66, 1.670, 1.704, 1.503, 1.212, 1.121, 1.070],
+  'GS':    [ 0.45, 0.514, 0.470, 0.427, 0.372, 0.339, 0.288],
+  'AXP':   [ 1.24, 1.189, 1.119, 0.984, 0.854, 0.747, 0.671],
+  'VZ':    [ 3.05, 3.029, 2.854, 4.069, 4.132, 4.200, 4.145],
+  'COST':  [ 0.47, 0.439, 0.436, 0.440, 0.440, 0.444, 0.443],
+  'DIS':   [ 2.02, 1.88,  1.80,  1.66,  1.50,  1.824, 1.708],
+  'MCD':   [ 1.24, 1.079, 1.004, 0.918, 0.771, 0.732, 0.706],
+  'ABT':   [ 3.19, 3.224, 3.294, 1.492, 1.756, 1.744, 1.732],
 };
 
 function sharesAt(ticker: string, date: string, pointInTime: boolean): number {

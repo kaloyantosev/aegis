@@ -21,6 +21,7 @@ TICKERS = [
     "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "BRK-B", "TSLA", "LLY", "AVGO",
     "JPM", "WMT", "XOM", "V", "UNH", "MA", "PG", "JNJ", "HD", "ORCL",
     "CVX", "BAC", "KO", "CSCO", "INTC", "IBM", "GE", "PFE", "WFC", "C", "T",
+    "AIG", "MO", "PM", "COP", "SLB", "MRK", "PEP", "HPQ", "QCOM", "GS", "AXP", "VZ", "COST", "DIS", "MCD", "ABT",
 ]
 START = "2005-01-01"  # one year of history before the 2006 backtest start, for indicator warm-up
 OUT = Path(__file__).resolve().parent.parent / "public" / "data" / "prices.json"

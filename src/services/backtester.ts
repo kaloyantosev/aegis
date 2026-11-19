@@ -202,15 +202,10 @@ export const backtester = {
 
     // ── Top-10 inputs
     const stockCloses: { [t: string]: number[] } = {};
-    const sma50: { [t: string]: number[] } = {}, sma100: { [t: string]: number[] } = {}, sma200: { [t: string]: number[] } = {};
     for (const t of Object.keys(SHARE_ANCHORS)) {
       const s = workingData[t];
       if (!s) continue;
-      const c = s.map(p => p.close);
-      stockCloses[t] = c;
-      sma50[t] = calculateSMA(c, 50);
-      sma100[t] = calculateSMA(c, 100);
-      sma200[t] = calculateSMA(c, 200);
+      stockCloses[t] = s.map(p => p.close);
     }
 
     // ── USI inputs
@@ -277,15 +272,7 @@ export const backtester = {
         const shares = sharesAt(t, date, method.pointInTimeShares);
         if (price <= 0 || shares <= 0) continue;
         const mcap = price * shares;
-        const r21 = price / (c[Math.max(0, idx - 21)] || price) - 1;
-        const r63 = price / (c[Math.max(0, idx - 63)] || price) - 1;
-        const r126 = price / (c[Math.max(0, idx - 126)] || price) - 1;
-        const r252 = price / (c[Math.max(0, idx - 252)] || price) - 1;
-        const s50 = sma50[t][idx] || price, s100 = sma100[t][idx] || price, s200 = sma200[t][idx] || price;
-        const mom = r63 * 0.40 + r126 * 0.35 + r252 * 0.25;
-        const crashPenalty = (r21 < -0.14 && price < s50) ? 0.4 : 1.0;
-        const trend = (price >= s100 ? 1.25 : 0.6) * (price >= s200 ? 1.25 : 0.5) * crashPenalty;
-        ranked.push({ ticker: t, score: Math.pow(mcap, 0.35) * Math.max(0.05, 1 + mom * 3.0) * trend });
+        ranked.push({ ticker: t, score: mcap });
       }
       ranked.sort((a, b) => b.score - a.score);
       const top = ranked.slice(0, 10);
@@ -518,8 +505,8 @@ export const backtester = {
         if (key !== currentTop10Key) {
           currentTop10Key = key;
           top10Updates++;
-          order({ toId: 'neutral', assets: top, reason: 'Monthly Top-10 update', rotation: false });
         }
+        order({ toId: 'neutral', assets: top, reason: 'Monthly Top-10 rebalance', rotation: false });
       }
 
       // 3) Mark to market at today's close.

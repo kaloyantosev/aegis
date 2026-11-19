@@ -215,7 +215,7 @@ export default function App() {
             <h2>How Aegis works and how it is tested</h2>
             <h4>Strategy</h4>
             <ul>
-              <li><b>Neutral:</b> the 10 highest-scoring US mega caps (size × 3/6/12-month momentum × trend), 10% each, reviewed monthly. Or an ETF mix (50% SPY, 30% XLK, 10% DBC, 10% XLF).</li>
+              <li><b>Neutral:</b> the 10 largest US publicly traded companies by market capitalization, equal-weighted (10% each), checked and rebalanced at the beginning of every month.</li>
               <li><b>Buy → Extreme Buy:</b> when the USI stress index stays above 188 / 228 / 323 / 895 for two closes, rotate into progressively more aggressive portfolios (QQQ and TQQQ in the aggressive ladder).</li>
               <li><b>Bear Shield:</b> 75% T-bills, 25% gold when SPY is in a structural downtrend and a new stress wave starts. Exit on capitulation (to Extreme Buy) or when stress normalises (to Neutral).</li>
             </ul>
